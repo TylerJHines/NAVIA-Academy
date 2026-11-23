@@ -1,0 +1,58 @@
+{
+  "exam_1": {
+    "questions": 30,
+    "domains": {
+      "Installation and Deployment": 9,
+      "Administration": 7,
+      "Workload Management": 7,
+      "Troubleshooting and Optimization": 7
+    },
+    "correct_answer_score": 100,
+    "works_in_browser": true
+  },
+  "exam_2": {
+    "questions": 30,
+    "domains": {
+      "Installation and Deployment": 9,
+      "Administration": 7,
+      "Workload Management": 7,
+      "Troubleshooting and Optimization": 7
+    },
+    "correct_answer_score": 100,
+    "works_in_browser": true
+  },
+  "exam_3": {
+    "questions": 30,
+    "domains": {
+      "Installation and Deployment": 9,
+      "Administration": 7,
+      "Workload Management": 7,
+      "Troubleshooting and Optimization": 7
+    },
+    "correct_answer_score": 100,
+    "works_in_browser": true
+  },
+  "exam_4": {
+    "questions": 30,
+    "domains": {
+      "Installation and Deployment": 9,
+      "Administration": 7,
+      "Workload Management": 7,
+      "Troubleshooting and Optimization": 7
+    },
+    "correct_answer_score": 100,
+    "works_in_browser": true
+  },
+  "browser_console_errors": [],
+  "independent_question_count": 120,
+  "original_lab_navigation": "passed",
+  "source_baseline": "NAVIA-Academy-main (1).zip",
+  "changed_source_files": [
+    "aio/app.js"
+  ],
+  "original_aio_sha256": "2ab78d977bb247f7b3a229b4e9410ac72f0d71ef56cd123b8cfe3fcc7008e7dc",
+  "updated_aio_sha256": "c17f02fd60894576ffa08ef9a6bd3737188becb88aaf0ee848b0cc064619ccec",
+  "other_source_files_modified": 0,
+  "paid_video_questions_copied_verbatim": false,
+  "simulator_logic_modified": false
+}

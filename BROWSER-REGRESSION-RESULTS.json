@@ -1,0 +1,58 @@
+{
+  "when": "2026-11-19",
+  "engine": "Chromium Playwright in-browser JS/DOM interaction; scripts injected due no localhost browsing",
+  "aio": {
+    "lab_runs": 15,
+    "lab_ids": [
+      "drain",
+      "image",
+      "bcm",
+      "slurm-resources",
+      "slurm-partition",
+      "slurm-gres",
+      "slurm-service",
+      "k8s-pending",
+      "k8s-crash",
+      "k8s-gpu",
+      "k8s-node",
+      "bcm-image",
+      "bcm-category",
+      "gpu-xid",
+      "storage-full"
+    ],
+    "mock_variants_tested": 4,
+    "negative_cases": [
+      "invalid tag cannot heal",
+      "no full investigation without image source",
+      "mock solution hints hidden",
+      "mock 30 questions+3 labs/results"
+    ]
+  },
+  "ain": {
+    "lab_runs": 14,
+    "lab_ids": [
+      "ib-down",
+      "ib-errors",
+      "ib-subnet",
+      "ib-traffic",
+      "cx-link",
+      "cx-bgp",
+      "cx-mtu",
+      "cx-route",
+      "sx-pfc",
+      "sx-ecn",
+      "sx-rdma",
+      "sx-fabric",
+      "net-operator",
+      "automation-drift"
+    ],
+    "negative_cases": [
+      "NVUE staged but unapplied does not pass",
+      "mock lab solution commands hidden",
+      "75 distinct questions, published domain weights"
+    ],
+    "mock_variants_tested": 4
+  },
+  "errors": [],
+  "result": "PASS"
+}

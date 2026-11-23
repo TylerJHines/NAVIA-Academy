@@ -40,20 +40,3 @@ body:has(.mock-lab-heading){height:100dvh;overflow:hidden;display:flex;flex-dire
 .commands{display:grid;grid-template-columns:260px minmax(0,1fr);gap:15px}.command-list{max-height:590px;overflow:auto}.command-list button{display:block;width:100%;text-align:left;padding:11px;background:transparent;color:#b9d0e5;border:0;border-bottom:1px solid #2c4059;white-space:normal}.command-list button.selected{color:#7be4bd;background:#20364c}.note{background:#22354a;border-left:3px solid #5bd3b4;padding:12px;border-radius:6px}@media(max-width:750px){.commands{grid-template-columns:1fr}.command-list{max-height:210px}}
 
 .scenario-brief{margin:12px 0;padding:12px;border:1px solid #31566a;border-radius:10px;background:#12273a;font-size:13px}.scenario-brief p{line-height:1.5}.scenario-brief pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}.scenario-brief a{color:#83c9ff}
-
-/* AIN AIO-style timed mock examination */
-.mock-hero{display:grid;gap:12px}.mock-top{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 16px;background:#16243b;border:1px solid #35516a;border-radius:12px;margin-bottom:12px}.mock-timer{font-size:21px;color:#8de9d2;font-variant-numeric:tabular-nums}.mock-question{max-width:900px;margin:auto;background:#16243b;border:1px solid #35516a;border-radius:14px;padding:20px}.mock-question .option{display:block;width:100%;text-align:left;margin:8px 0;padding:13px;background:#1b2d47;border:1px solid #38516c;border-radius:8px;color:#eef5fc;cursor:pointer}.mock-question .option.chosen{border:2px solid #58d3aa}.mock-question select{padding:7px;background:#16243b;color:white;border:1px solid #35516a}.mock-table{width:100%;border-collapse:collapse;text-align:left}.mock-table th,.mock-table td{padding:10px;border-bottom:1px solid #34465c}.mock-review{padding:12px 0;border-bottom:1px solid #34465c}.mock-lab-heading{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px}.mock-lab-heading span:last-child{color:#ffc67a;font-size:12px}@media(max-width:700px){.mock-question{padding:12px}.mock-timer{font-size:17px}}
-
-/* v21: scrolling repair. The mock and guided lab must never trap the page. */
-html{overflow-y:auto;scroll-behavior:auto}
-body:has(.lab-workspace),body:has(.mock-lab-heading){height:auto!important;min-height:100dvh!important;overflow-x:hidden!important;overflow-y:auto!important;display:block!important}
-body:has(.lab-workspace) main,body:has(.mock-lab-heading) main{height:auto!important;min-height:0!important;max-width:1500px!important;overflow:visible!important;display:block!important;padding:12px 18px 55px!important}
-.lab-workspace,body:has(.mock-lab-heading) main .lab-workspace{height:auto!important;min-height:0!important;display:flex!important;flex-direction:column}
-.workspace-grid{height:auto!important;min-height:0!important;flex:none!important;align-items:start}
-.lab-panel{height:auto!important;max-height:min(76vh,850px);overflow-y:auto!important;overscroll-behavior:contain;scrollbar-gutter:stable}
-.terminal-panel{height:min(76vh,850px);min-height:420px!important;overflow:hidden}
-.terminal-panel .output{overflow-y:auto!important;min-height:150px}
-.scenario-brief{flex:none;overflow:visible;line-height:1.45}
-.scenario-brief p{margin:8px 0;font-size:12px}
-.scenario-brief details{margin-top:10px}.scenario-brief summary{cursor:pointer;color:#a8d9ff}
-@media(max-width:799px){body:has(.lab-workspace) main,body:has(.mock-lab-heading) main{padding:8px 8px 45px!important}.workspace-grid{display:flex!important;flex-direction:column!important}.lab-panel{max-height:none!important;overflow:visible!important;width:100%}.terminal-panel{width:100%;height:410px!important;min-height:410px!important}.mock-lab-heading{margin-top:8px}.scenario-brief p{font-size:12px}}

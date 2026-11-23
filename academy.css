@@ -45,3 +45,14 @@ header > div:first-child{flex:1 1 auto;min-width:0}
 
 /* V16 resource metadata and team analytics */
 .resource-content{display:flex;flex-direction:column;gap:5px;min-width:0}.resource-details{display:flex;flex-wrap:wrap;gap:6px;font-size:11px;color:#b6cce0}.resource-details>span{border:1px solid #38536d;border-radius:12px;padding:3px 8px}.resource-details .core-label{color:#8ee5b4;border-color:#287e61}.resource-details .optional-label{color:#b9c6d5}.resource-details .shared-label{color:#a8d6fa}.team-chart-labs{background:#d5a86d}.team-chart-time{background:#aa9cf0}.team-grid{grid-template-columns:repeat(auto-fit,minmax(175px,1fr))}
+
+/* NAVIA Test Day Prep — persistent, responsive, original uploaded infographic */
+.exam-day-prep{max-width:100%;min-width:0}
+.exam-day-prep h1{margin:25px 0 24px}
+.exam-day-prep>.sub{margin:0 0 17px;line-height:1.65}
+.exam-day-figure{margin:0;max-width:100%}
+.exam-day-figure>a{display:block;max-width:100%;border-radius:12px;overflow:hidden;border:1px solid #354961;background:#0b1424}
+.exam-day-graphic{display:block;width:100%;height:auto;max-width:100%;object-fit:contain}
+.exam-day-figure figcaption{margin:12px 0 16px;font-size:14px}
+.exam-day-disclaimer{color:#bacde4;line-height:1.65;margin:16px 0 36px}
+@media(max-width:650px){.exam-day-prep h1{margin:19px 0}.exam-day-figure>a{border-radius:8px}}

@@ -1,0 +1,30 @@
+{
+  "release": 20,
+  "prepared_on": "2026-11-19",
+  "preserved_original_non_simulator_files": 27,
+  "javascript_syntax_checked_files": 14,
+  "javascript_files": [
+    "academy-team.js",
+    "academy.js",
+    "academy-cloud.js",
+    "data.js",
+    "aio/ops-engine.js",
+    "aio/cloud.js",
+    "aio/firebase-config.js",
+    "aio/sw.js",
+    "aio/app.js",
+    "ain/extra-questions.js",
+    "ain/cloud.js",
+    "ain/labs.js",
+    "ain/app.js",
+    "ain/bank.js"
+  ],
+  "aio_lab_runs": 15,
+  "ain_lab_runs": 14,
+  "aio_mock_variants": 4,
+  "ain_mock_variants": 4,
+  "browser_errors": [],
+  "node_scenario_tests": "PASS",
+  "integrity": "PASS",
+  "external_production_sign_in_tested": false
+}

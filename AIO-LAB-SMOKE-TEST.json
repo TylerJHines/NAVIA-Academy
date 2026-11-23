@@ -1,0 +1,97 @@
+[
+  {
+    "id": "drain",
+    "done": 4,
+    "total": 4,
+    "errors": []
+  },
+  {
+    "id": "image",
+    "done": 4,
+    "total": 4,
+    "errors": [
+      [
+        "kubectl describe pod inference",
+        "Name: inference\nImage: nvcr.io/nvidia/pytorch:missing\nStatus: ImagePullBackOff\nEvents: Warning Failed Failed to pull ima"
+      ]
+    ]
+  },
+  {
+    "id": "bcm",
+    "done": 9,
+    "total": 9,
+    "errors": []
+  },
+  {
+    "id": "slurm-resources",
+    "done": 5,
+    "total": 5,
+    "errors": []
+  },
+  {
+    "id": "slurm-partition",
+    "done": 5,
+    "total": 5,
+    "errors": []
+  },
+  {
+    "id": "slurm-gres",
+    "done": 5,
+    "total": 5,
+    "errors": []
+  },
+  {
+    "id": "slurm-service",
+    "done": 5,
+    "total": 5,
+    "errors": []
+  },
+  {
+    "id": "k8s-pending",
+    "done": 5,
+    "total": 5,
+    "errors": []
+  },
+  {
+    "id": "k8s-crash",
+    "done": 5,
+    "total": 5,
+    "errors": []
+  },
+  {
+    "id": "k8s-gpu",
+    "done": 6,
+    "total": 6,
+    "errors": []
+  },
+  {
+    "id": "k8s-node",
+    "done": 5,
+    "total": 5,
+    "errors": []
+  },
+  {
+    "id": "bcm-image",
+    "done": 8,
+    "total": 8,
+    "errors": []
+  },
+  {
+    "id": "bcm-category",
+    "done": 7,
+    "total": 7,
+    "errors": []
+  },
+  {
+    "id": "gpu-xid",
+    "done": 5,
+    "total": 5,
+    "errors": []
+  },
+  {
+    "id": "storage-full",
+    "done": 5,
+    "total": 5,
+    "errors": []
+  }
+]
