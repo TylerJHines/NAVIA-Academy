@@ -9,7 +9,7 @@
   const MAC = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/;
   const IP = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
   const HOST = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/i;
-  const center8 = t => { const l = Math.floor((8 - t.length) / 2); return '[' + ' '.repeat(l) + t + ' '.repeat(8 - t.length - l) + ']'; };
+  const center8 = t => { if (t.length >= 8) return '[ ' + t + ' ]'; const l = Math.floor((8 - t.length) / 2); return '[' + ' '.repeat(l) + t + ' '.repeat(8 - t.length - l) + ']'; };
 
   function create(cfg) {
     const mode = cfg.mode || 'practice', practice = mode === 'practice';
@@ -40,6 +40,7 @@
     let k8s = null; // deployed cluster {configPath, workers, controlPlane, version, name, method}
     let moduleLoaded = false;
     const view = o => o.stage || o.data;
+    const statusOf = o => { const d = view(o); if (!o.power) return d.status || 'DOWN'; if (o.power.state === 'off') return 'DOWN'; return sh.now() - o.power.at < 20000 ? 'INSTALLING' : 'UP'; };
     const committed = (mode, name) => { const o = store[mode][name]; return o && !o.isNew ? o : null; };
     const modified = mode => Object.values(store[mode]).some(o => o.stage);
     const nodesInCategory = c => Object.values(store.device).filter(o => !o.isNew && o.data.category === c).length;
@@ -68,14 +69,14 @@
       const d = view(o);
       if (m === 'softwareimage') return ok(showTable([['Name', d.name], ['Revision', ''], ['Path', d.path], ['Kernel version', d.kernelversion], ['Kernel parameters', d.kernelparameters || 'rdblacklist=nouveau'], ['Locked', d.locked], ['Creation time', NL.dateCmd(d.created || t0)], ['Nodes', String(nodesUsingImage(d.name))], ['Enable SOL', 'no'], ['Boot FSPart', '98784247810'], ['Notes', d.notes ? '<' + d.notes.length + 'B>' : '<0B>']]));
       if (m === 'category') return ok(showTable([['Name', d.name], ['Revision', ''], ['Software image', d.softwareimage], ['Nodes', String(nodesInCategory(d.name))], ['Default gateway', d.defaultgateway], ['Name servers', d.nameservers], ['Install mode', d.installmode], ['New node install mode', d.newnodeinstallmode], ['Roles', d.roles], ['Management network', 'internalnet'], ['Notes', d.notes ? '<' + d.notes.length + 'B>' : '<0B>']]));
-      if (m === 'device') return ok(showTable([['Hostname', d.hostname], ['Type', d.type], ['Category', d.category], ['Software image', d.softwareimage || (d.category ? `(${d.category}->${(committed('category', d.category) || { data: {} }).data.softwareimage || ''})` : '')], ['MAC', d.mac], ['IP', d.ip], ['Network', d.network], ['Provisioning interface', d.type === 'HeadNode' ? '' : 'BOOTIF'], ['Install mode', d.installmode || ''], ['Status', d.status || 'DOWN'], ['Rack', ''], ['Notes', d.notes ? '<' + d.notes.length + 'B>' : '<0B>']]));
+      if (m === 'device') return ok(showTable([['Hostname', d.hostname], ['Type', d.type], ['Category', d.category], ['Software image', d.softwareimage || (d.category ? `(${d.category}->${(committed('category', d.category) || { data: {} }).data.softwareimage || ''})` : '')], ['MAC', d.mac], ['IP', d.ip], ['Network', d.network], ['Provisioning interface', d.type === 'HeadNode' ? '' : 'BOOTIF'], ['Install mode', d.installmode || ''], ['Status', statusOf(o)], ['Rack', ''], ['Notes', d.notes ? '<' + d.notes.length + 'B>' : '<0B>']]));
       return ok('');
     }
     function list(s) {
       const m = s.mode;
       if (m === 'softwareimage') return ok(NL.table(['Name (key)', 'Path (key)', 'Kernel version', 'Nodes'], Object.values(store.softwareimage).map(o => { const d = view(o); return [d.name, d.path, d.kernelversion, String(nodesUsingImage(d.name))]; }), { rule: true, sep: ' ' }));
       if (m === 'category') return ok(NL.table(['Name (key)', 'Software image', 'Nodes'], Object.values(store.category).map(o => { const d = view(o); return [d.name, d.softwareimage, String(nodesInCategory(d.name))]; }), { rule: true, sep: ' ' }));
-      if (m === 'device') return ok(NL.table(['Type', 'Hostname (key)', 'MAC', 'Category', 'IP', 'Network', 'Status'], Object.values(store.device).map(o => { const d = view(o); return [d.type, d.hostname, d.mac, d.category, d.ip, d.network, center8(d.status || 'DOWN')]; }), { rule: true, sep: ' ' }));
+      if (m === 'device') return ok(NL.table(['Type', 'Hostname (key)', 'MAC', 'Category', 'IP', 'Network', 'Status'], Object.values(store.device).map(o => { const d = view(o); return [d.type, d.hostname, d.mac, d.category, d.ip, d.network, center8(statusOf(o))]; }), { rule: true, sep: ' ' }));
       if (m === 'network') return ok(NL.table(['Name (key)', 'Type', 'Netmask bits', 'Base address', 'Domain name', 'IPv6'], [['externalnet', 'External', '24', '192.168.200.0', 'cm.cluster', 'no'], ['globalnet', 'Global', '0', '0.0.0.0', 'cm.cluster', ''], ['internalnet', 'Internal', '16', '10.141.0.0', 'eth.cluster', 'no'], ['ipminet', 'Internal', '16', '10.148.0.0', 'ipmi.cluster', 'no']], { rule: true, sep: ' ' }));
       if (m === 'partition') return ok(NL.table(['Name (key)', 'Cluster name'], [['base', 'BCM 10.0 Cluster']], { rule: true, sep: ' ' }));
       if (m === 'kubernetes') return ok(NL.table(['Name (key)', 'Version', 'Nodes'], k8s ? [[k8s.name, 'v' + k8s.version, String(k8sNodes().length)]] : [], { rule: true, sep: ' ' }));
@@ -111,7 +112,7 @@
           if (s.mode) { s.mode = ''; return ok(''); }
           return cmshCmd(s, ['quit']);
         case 'home': case 'top': case '/': s.mode = ''; s.sel = null; return ok('');
-        case 'help': return ok(['================================== Top ===================================', 'alias ......................... Set aliases', 'category ...................... Enter category mode', 'commit ........................ Commit local changes', 'device ........................ Enter device mode', 'exit .......................... Exit from current object or mode', 'help .......................... Display this help', 'kubernetes .................... Enter kubernetes mode', 'list .......................... List objects in current mode', 'modified ...................... List modified objects', 'network ....................... Enter network mode', 'partition ..................... Enter partition mode', 'quit .......................... Quit shell', 'refresh ....................... Revert local changes', 'softwareimage ................. Enter softwareimage mode', '', '=============================== Object mode ===============================', 'add ........................... Create a new object', 'clone ......................... Clone an object', 'get ........................... Get a property', 'remove ........................ Remove an object', 'set ........................... Set a property', 'show .......................... Show object properties', 'use ........................... Use the specified object', 'status ........................ (device mode) Show device status'].join('\n'));
+        case 'help': return ok(['================================== Top ===================================', 'alias ......................... Set aliases', 'category ...................... Enter category mode', 'commit ........................ Commit local changes', 'device ........................ Enter device mode', 'exit .......................... Exit from current object or mode', 'help .......................... Display this help', 'kubernetes .................... Enter kubernetes mode', 'list .......................... List objects in current mode', 'modified ...................... List modified objects', 'network ....................... Enter network mode', 'partition ..................... Enter partition mode', 'quit .......................... Quit shell', 'refresh ....................... Revert local changes', 'softwareimage ................. Enter softwareimage mode', '', '=============================== Object mode ===============================', 'add ........................... Create a new object', 'clone ......................... Clone an object', 'get ........................... Get a property', 'remove ........................ Remove an object', 'set ........................... Set a property', 'show .......................... Show object properties', 'use ........................... Use the specified object', 'power ......................... (device mode) power on|off|reset|status [-n node]', 'status ........................ (device mode) Show device status'].join('\n'));
         case 'modified': {
           const rows = [];
           ['softwareimage', 'category', 'device'].forEach(mm => Object.values(store[mm]).filter(o => o.stage).forEach(o => rows.push([o.isNew ? '+' : '', mm[0].toUpperCase() + mm.slice(1), view(o).name || view(o).hostname])));
@@ -143,10 +144,32 @@
           if (!editable) return ok(showTable([['Name', n]]));
           return show(s, n);
         }
+        case 'power': {
+          if (m !== 'device') return fail('Unknown command: power');
+          const act = (a[1] || '').toLowerCase();
+          if (!['on', 'off', 'reset', 'cycle', 'status'].includes(act)) return fail('Usage: power on|off|reset|status [-n <node>[,<node>...]]');
+          const ni = a.indexOf('-n');
+          const names = ni >= 0 ? (a[ni + 1] || '').split(',').filter(Boolean) : (s.sel ? [s.sel] : null);
+          if (!names || !names.length) return fail('power: no device given. Use -n <node>, or "use <node>" first');
+          const lines = [], errs = [];
+          const box = t => { const w = 9, l = Math.floor((w - t.length) / 2); return '[' + ' '.repeat(l) + t + ' '.repeat(w - t.length - l) + ']'; };
+          for (const n of names) {
+            const o = coll[n];
+            if (!o || o.isNew) { errs.push(`Unable to find device: ${n}${o && o.isNew ? ' (object is not committed)' : ''}`); if (practice && o && o.isNew) sh.hint('Commit the new node first. BCM can only power on devices it has saved.'); continue; }
+            if (view(o).type === 'HeadNode') { errs.push(`power: ${n} is the head node`); continue; }
+            const isOn = o.power ? o.power.state === 'on' : statusOf(o) !== 'DOWN';
+            if (act === 'status') { lines.push(`ipmi0 .................... ${box(isOn ? 'ON' : 'OFF')} ${n}`); continue; }
+            if (act === 'off') { o.power = { state: 'off', at: sh.now() }; lines.push(`ipmi0 .................... ${box('OFF')} ${n}`); continue; }
+            o.power = { state: 'on', at: sh.now() };
+            lines.push(`ipmi0 .................... ${box(act === 'on' ? 'ON' : 'RESET')} ${n}`);
+          }
+          if (practice && !errs.length && act !== 'status' && act !== 'off' && names.includes(P.node)) sh.hint(`${P.node} is booting and being provisioned. Check it with ds or status -n ${P.node}: it shows INSTALLING, then UP.`);
+          return { out: lines.join('\n'), err: errs.join('\n'), code: errs.length ? 1 : 0 };
+        }
         case 'status': {
           if (m !== 'device') return fail('Unknown command: status');
           const ni = a.indexOf('-n'); const only = ni >= 0 ? (a[ni + 1] || '').split(',') : (a[1] && !a[1].startsWith('-') ? [a[1]] : s.sel ? [s.sel] : null);
-          const lines = Object.values(store.device).filter(o => !only || only.includes(view(o).hostname)).map(o => { const d = view(o); return `${padR(d.hostname, 16)} ${center8(d.status || 'DOWN')}${o.isNew ? ' (uncommitted)' : ''}`; });
+          const lines = Object.values(store.device).filter(o => !only || only.includes(view(o).hostname)).map(o => { const d = view(o); return `${padR(d.hostname, 16)} ${center8(statusOf(o))}${o.isNew ? ' (uncommitted)' : ''}`; });
           return ok(lines.join('\n'));
         }
         case 'get': {
@@ -255,7 +278,7 @@
               outs.push(notice(`Started to copy: /cm/images/${o.from || 'default-image'} -> ${d.path} (${NL.int(r, 100, 999)})`), notice(`Copied: /cm/images/${o.from || 'default-image'} -> ${d.path} (${NL.int(r, 100, 999)})`), notice(`Initial ramdisk for image ${d.name} is being generated`), notice(`Initial ramdisk for image ${d.name} was generated successfully`));
               sh.mkdirp(d.path);
             }
-            if (m === 'device' && wasNew) outs.push(notice(`Check node ${n}: ${d.type} added`));
+            if (m === 'device' && wasNew) { outs.push(notice(`Check node ${n}: ${d.type} added`)); if (practice && n === P.node) sh.hint(`Saved, but the server is still powered off. Power it on through BCM: power on -n ${P.node} (or use ${P.node}, then power on).`); }
           }
           if (practice && !errs.length) {
             if (m === 'softwareimage' && targets.includes(P.image)) sh.hint(`Image committed. Next: category mode, clone default ${P.category}, commit.`);
@@ -282,7 +305,7 @@
         complete(line) {
           const m = /(\S*)$/.exec(line), word = m[1], before = line.slice(0, line.length - word.length);
           const first = !before.trim() || /;\s*$/.test(before);
-          const cmds = MODES.concat(['list', 'use', 'show', 'set', 'get', 'clone', 'add', 'commit', 'remove', 'refresh', 'exit', 'quit', 'help', 'modified', 'status']);
+          const cmds = MODES.concat(['list', 'use', 'show', 'set', 'get', 'clone', 'add', 'commit', 'remove', 'refresh', 'exit', 'quit', 'help', 'modified', 'status', 'power', 'ds']);
           let cands = [];
           const prev = before.trim().split(/\s+/);
           if (first) cands = cmds;
@@ -406,7 +429,7 @@ modules:
         { id: 'image', text: `Create a software image named ${P.image} by cloning default-image.` },
         { id: 'category', text: `Create a category named ${P.category} by cloning the default category.` },
         { id: 'assign', text: `Configure category ${P.category} to use software image ${P.image}.` },
-        { id: 'node', text: `Add a physical node ${P.node} with IP ${P.ip} and MAC ${P.mac}, in category ${P.category}.` },
+        { id: 'node', text: `Add a physical node ${P.node} with IP ${P.ip} and MAC ${P.mac}, in category ${P.category}, then power it on.` },
         { id: 'config', text: `Run cm-kubernetes-setup with the head node as the control plane and ${P.category} as the worker category. Save the configuration to ${P.cfgPath} without deploying.` },
         { id: 'deploy', text: `Deploy Kubernetes from the saved file ${P.cfgPath}.` }
       ],
@@ -443,6 +466,12 @@ modules:
           }
           if (a.length) return fail(`cm-kubernetes-setup: error: unrecognized arguments: ${a.join(' ')}`, 2);
           return ok(startWizard());
+        }
+        if (c === 'scontrol') {
+          const sub = (argv[1] || '').toLowerCase();
+          if (sub === 'update') { if (practice) sh.hint(`scontrol only talks to Slurm. It never powers hardware on, and Slurm does not know ${P.node}. Power the node on through BCM: cmsh -c "device; power on -n ${P.node}".`); return fail('slurm_update error: Invalid node name specified'); }
+          if (sub === 'show' && /^nodes?$/.test(argv[2] || '') && argv[3]) return fail(`Node ${argv[3]} not found`);
+          return undefined;
         }
         if (c === 'module' || c === 'ml') {
           const sub = argv[1];
@@ -484,9 +513,10 @@ modules:
           if ((d.mac || '').toUpperCase() !== P.mac.toUpperCase()) probs.push(`MAC is ${d.mac} (expected ${P.mac.toUpperCase()})`);
           if (d.category !== P.category) probs.push(`category is ${d.category} (expected ${P.category})`);
           if (nd.stage) probs.push('it has uncommitted changes');
+          if (!nd.power || nd.power.state !== 'on') probs.push(`it was never powered on (cmsh: device; power on -n ${P.node})`);
           if (probs.length) nerr = `${P.node}: ` + probs.join('; ') + '.';
         }
-        res.push({ id: 'node', pass: !nerr, detail: nerr || `${P.node} is committed with IP ${P.ip}, MAC ${P.mac.toUpperCase()}, category ${P.category}.` });
+        res.push({ id: 'node', pass: !nerr, detail: nerr || `${P.node} is committed with IP ${P.ip}, MAC ${P.mac.toUpperCase()}, category ${P.category}, and powered on.` });
         const ct = sh.read(P.cfgPath);
         let cerr = '';
         if (ct === undefined) cerr = `No configuration file at ${P.cfgPath}.`;
@@ -504,7 +534,7 @@ modules:
       },
       solution() {
         const dir = NL.dirname(P.cfgPath);
-        return ['cmsh', 'softwareimage', `clone default-image ${P.image}`, 'commit', 'category', `clone default ${P.category}`, 'commit', `use ${P.category}`, `set softwareimage ${P.image}`, 'commit', 'device', `add physicalnode ${P.node} ${P.ip}`, `set category ${P.category}`, `set mac ${P.mac}`, 'commit', 'quit']
+        return ['cmsh', 'softwareimage', `clone default-image ${P.image}`, 'commit', 'category', `clone default ${P.category}`, 'commit', `use ${P.category}`, `set softwareimage ${P.image}`, 'commit', 'device', `add physicalnode ${P.node} ${P.ip}`, `set category ${P.category}`, `set mac ${P.mac}`, 'commit', `power on -n ${P.node}`, `status -n ${P.node}`, 'quit']
           .concat(dir !== '/root' ? [`mkdir -p ${dir}`] : [])
           .concat(['cm-kubernetes-setup', '#  Deploy → version → name → accept networks → control plane: headnode', `#  worker categories: ${P.category} → Enter → Enter → GPU operator → "Save config & exit"`, `#  save to ${P.cfgPath}`, `cm-kubernetes-setup -c ${P.cfgPath}`, 'module load kubernetes', 'kubectl get nodes']);
       }

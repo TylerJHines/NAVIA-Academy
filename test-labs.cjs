@@ -44,7 +44,7 @@ for (let seed = 1; seed <= 120; seed++) {
     allPass(t, 'k8s seed ' + seed); }
   { const t = make('bcm', seed), P = t.P, run = t.run;
     ['cmsh', 'softwareimage', `clone default-image ${P.image}`, 'commit', 'category', `clone default ${P.category}`, 'commit', `use ${P.category}`, `set softwareimage ${P.image}`, 'commit',
-      'device', `add physicalnode ${P.node} ${P.ip}`, `set category ${P.category}`, `set mac ${P.mac.toLowerCase()}`, 'commit', 'quit'].forEach(run);
+      'device', `add physicalnode ${P.node} ${P.ip}`, `set category ${P.category}`, `set mac ${P.mac.toLowerCase()}`, 'commit', `power on -n ${P.node}`, 'quit'].forEach(run);
     run(`mkdir -p ${NL.dirname(P.cfgPath)}`); run('cm-kubernetes-setup');
     ['1', '', '', '', '1', '2', '', '', 'n', '2', P.cfgPath].forEach(run);
     run(`cm-kubernetes-setup -c ${P.cfgPath}`);
@@ -61,6 +61,8 @@ const failed = (t, id) => !t.lab.grade().results.find(x => x.id === id).pass;
 { const t = make('k8s', 1, 'practice'); t.run('module load kubernetes'); t.run('cat <<EOF > /home/student/jobs/training.yaml'); ['apiVersion: batch/v1', 'kind: Job', 'metadata:', '  name: training', 'spec:', '  template:', '    spec:', '      containers:', '      - name: t', '        image: busybox:1.36', 'EOF'].forEach(t.run); const o = t.run('kubectl apply -f /home/student/jobs/training.yaml'); assert(/restartPolicy: Required value/.test(o), 'a Job without restartPolicy must be rejected'); }
 { const t = make('k8s', 1, 'practice'); t.run('module load kubernetes'); t.run('kubectl run inference-direct --image=ngnix:1.27'); t.wait(10); assert(/ImagePullBackOff|ErrImagePull/.test(t.run('kubectl get pods')), 'a misspelled image must not start'); }
 { const t = make('bcm', 1, 'practice'); ['cmsh', 'softwareimage', 'clone default-image dgx-training', 'quit'].forEach(t.run); assert(failed(t, 'image'), 'an uncommitted clone must not count'); }
+{ const t = make('bcm', 1, 'practice'); ['cmsh -c "category; clone default gpu-training; commit"', 'cmsh -c "device; add physicalnode gpu004 10.141.0.44; set category gpu-training; set mac 02:00:00:00:04:04; commit"'].forEach(t.run); assert(failed(t, 'node'), 'a node that was never powered on must not pass');
+  const o = t.run('scontrol update nodename=gpu004 state=resume'); assert(/Invalid node name/.test(o), 'scontrol must not power on a BCM node'); t.run('cmsh -c "device; power on -n gpu004"'); assert(!failed(t, 'node'), 'power on through cmsh must pass'); }
 { const t = make('bcm', 1, 'practice'); ['cmsh', 'softwareimage', 'clone default-image dgx-training', 'category', 'clone default gpu-training', 'set softwareimage dgx-training'].forEach(t.run); assert(/not committed/.test(t.log[t.log.length - 1]), 'referencing an uncommitted image must fail'); }
 
 /* ---- command forms from a candidate's lab drill must all be accepted (one-liners and navigated) ---- */
@@ -85,12 +87,12 @@ accepts('k8s', ['module load kubernetes/default/1.32', 'kubectl cluster-info', '
 { const t = accepts('bcm', ['cmsh -c "softwareimage; list"', 'cmsh -c "softwareimage; clone default-image dgx-training; commit --wait"',
     'cmsh -c "category; clone default gpu-training; set softwareimage dgx-training; commit"', 'cmsh -c "category; list"', 'cmsh -c "category; use gpu-training; get softwareimage"',
     'cmsh -c "device; add physicalnode gpu004 10.141.0.44; set category gpu-training; set mac 02:00:00:00:04:04; commit"',
-    'cmsh -c "device; list"', 'cmsh -c "device; use gpu004; get category"', 'cmsh -c "device; status -n gpu004"', 'cmsh -c "ds"',
+    'cmsh -c "device; power on -n gpu004"', 'cmsh -c "device; list"', 'cmsh -c "device; use gpu004; get category"', 'cmsh -c "device; status -n gpu004"', 'cmsh -c "ds"',
     'cm-kubernetes-setup', '1', '', '', '', '1', '2', '', '', 'y', '2', '/root/cm-kubernetes-setup.conf',
     'cm-kubernetes-setup -v -c /root/cm-kubernetes-setup.conf', 'module load kubernetes && kubectl get nodes', 'kubectl cluster-info']);
   allPass(t, 'bcm one-liner style'); }
 { const t = accepts('bcm', ['cmsh', 'softwareimage', 'clone default-image dgx-training', 'commit', 'category; clone default gpu-training; commit', 'use gpu-training', 'set softwareimage dgx-training', 'commit',
-    'device', 'add physicalnode gpu004 10.141.0.44', 'set category gpu-training', 'set mac 02:00:00:00:04:04', 'commit', 'quit']);
+    'device', 'add physicalnode gpu004 10.141.0.44', 'set category gpu-training', 'set mac 02:00:00:00:04:04', 'commit', 'power on', 'quit']);
   ['image', 'category', 'assign', 'node'].forEach(id => assert(!failed(t, id), 'bcm navigated style: ' + id)); }
 
 console.log(`${runs} scenario solves, ${failures} failure(s)`);
