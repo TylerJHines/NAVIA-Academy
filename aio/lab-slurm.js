@@ -85,7 +85,11 @@
     const at = frac => Math.round(midnight + (failT - midnight) * frac);
     const pid = () => NL.int(r, 1100, 9800);
 
-    const P = { failNode, drainNode, busyNode, cause, failId: base, failName, owner, script, ownerScript, reqMem, dataGiB, asRoot, seed };
+    // Practice "both" drill: a second job, owned by someone else, ran out of memory on a healthy node
+    const both = practice && cfg.variant === 'both';
+    const M = both ? { id: base - 1, owner: 'lee', script: 'finetune.sh', path: '/home/lee/finetune.sh', home: '/home/lee', node: NODES.find(n => ![failNode, drainNode, busyNode].includes(n)), reqMem: 16, dataGiB: 40 } : null;
+    const failedFor = p => p === ownerScript ? { owner: owner, script: script, oom: cause === 'oom', data: dataGiB } : M && p === M.path ? { owner: M.owner, script: M.script, oom: true, data: M.dataGiB } : null;
+    const P = { failNode, drainNode, busyNode, cause, failId: base, failName, owner, script, ownerScript, reqMem, dataGiB, asRoot, seed, both, oomJob: M && { id: M.id, owner: M.owner, script: M.script, node: M.node } };
 
     /* ---- cluster state ---- */
     const nodes = {};
@@ -137,6 +141,7 @@
     J({ id: base - 6, name: 'hpl-bench', user: 'student', state: 'TIMEOUT', node: busyNode, submit: midnight - 5.2 * 3600e3, start: midnight - 5 * 3600e3, end: midnight - 1 * 3600e3, cpus: 112 });
     J({ id: base - 4, name: 'data-sync', user: 'mlops', state: 'COMPLETED', node: drainNode, submit: at(0.30), start: at(0.31), end: at(0.45), cpus: 8, gpus: 0 });
     J({ id: base - 2, name: 'preprocess', user: 'student', state: 'COMPLETED', node: busyNode, submit: at(0.70), start: at(0.71), end: at(0.73), cpus: 4, gpus: 0 });
+    if (M) J({ id: M.id, name: M.script, user: M.owner, state: 'OUT_OF_MEMORY', exit: '0:125', node: M.node, submit: at(0.55), start: at(0.56), end: at(0.62), cpus: 16, gpus: 1, mem: M.reqMem * 1024, maxrss: M.reqMem * 1048576 - 4012, script: M.path, workdir: M.home });
     J({ id: base, name: failName, user: owner, state: nodeFail ? 'NODE_FAIL' : 'OUT_OF_MEMORY', exit: nodeFail ? '0:0' : '0:125', node: failNode, submit: at(0.74), start: nodeFail ? at(0.75) : failT - 95e3, end: failT, cpus: 16, gpus: 1, mem: reqMem * 1024, maxrss: nodeFail ? Math.round(dataGiB * 1048576 * 1.04) : reqMem * 1048576 - 4012, script: ownerScript, workdir: ownerHome });
     J({ id: base + 1, name: 'sweep-07', user: 'research', state: 'CANCELLED', node: drainNode, submit: failT + (t0 - failT) * 0.1, start: failT + (t0 - failT) * 0.12, end: failT + (t0 - failT) * 0.3, cpus: 32 });
     J({ id: base + 2, name: 'llm-eval', user: 'research', state: 'RUNNING', node: busyNode, submit: failT + (t0 - failT) * 0.5, start: failT + (t0 - failT) * 0.52, end: null, cpus: 112, timelimit: 86400e3 });
@@ -148,17 +153,18 @@
     } else ctlLog(failT, `_job_complete: JobId=${base} OOM failure`);
     let nextId = base + 3 + (practice ? 2 : NL.int(r, 1, 9));
 
-    const SCRIPT = `#!/bin/bash
+    const scriptText = (name, mem) => `#!/bin/bash
 #SBATCH --partition=defq
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
-#SBATCH --mem=${reqMem}G
+#SBATCH --mem=${mem}G
 #SBATCH --time=00:10:00
 
-echo "Starting ${script} on $(hostname) at $(date)"
+echo "Starting ${name} on $(hostname) at $(date)"
 python3 train.py --epochs 1
 echo "Job $SLURM_JOB_ID finished on $(hostname) at $(date)"
 `;
+    const SCRIPT = scriptText(script, reqMem);
     ['/home/mlops', '/home/research', '/home/student', ownerHome].forEach(d => sh.mkdirp(d));
     sh.fs.set(ownerScript, { data: SCRIPT, mtime: midnight - 86400e3 * 2 });
     sh.fs.set(ownerHome + '/train.py', { data: '# training entry point (simulated)\n', mtime: midnight - 86400e3 * 2 });
@@ -169,10 +175,20 @@ echo "Job $SLURM_JOB_ID finished on $(hostname) at $(date)"
     ].concat(nodeFail
       ? ['Epoch 1/1: step 200/1000 loss=1.2841', `slurmstepd: error: *** JOB ${base} ON ${failNode} CANCELLED AT ${isoTime(failT)} DUE TO NODE FAILURE, SEE SLURMCTLD LOG FOR DETAILS ***`]
       : [`slurmstepd: error: Detected 1 oom_kill event in StepId=${base}.batch. Some of the step tasks have been OOM Killed.`]).join('\n') + '\n' });
+    if (M) {
+      const mj = jobs.find(x => x.id === M.id);
+      sh.mkdirp(M.home);
+      sh.fs.set(M.path, { data: scriptText(M.script, M.reqMem), mtime: midnight - 86400e3 * 2 });
+      sh.fs.set(M.home + '/train.py', { data: '# training entry point (simulated)\n', mtime: midnight - 86400e3 * 2 });
+      sh.fs.set(`${M.home}/slurm-${M.id}.out`, { mtime: mj.end, data: [`Starting ${M.script} on ${M.node} at ${NL.dateCmd(mj.start + 2000)}`, `Loading training shards into memory (${M.dataGiB}.0 GiB)...`, `slurmstepd: error: Detected 1 oom_kill event in StepId=${M.id}.batch. Some of the step tasks have been OOM Killed.`].join('\n') + '\n' });
+      jr(M.node, mj.end - 1e3, 'kernel', `Memory cgroup out of memory: Killed process ${pid()} (python3) total-vm:${M.reqMem * 1048576 + 912340}kB, anon-rss:${M.reqMem * 1048576 - 4012}kB, file-rss:0kB, shmem-rss:0kB, UID:${UIDS[M.owner]} pgtables:33012kB oom_score_adj:0`, 'kernel');
+      nodes[M.node].slurmdLog.push({ t: mj.end, text: `[${M.id}.batch] error: Detected 1 oom_kill event in StepId=${M.id}.batch. Some of the step tasks have been OOM Killed.` });
+      ctlLog(mj.end, `_job_complete: JobId=${M.id} OOM failure`);
+    }
     sh.mkdirp('/etc/slurm');
 
     /* ---- grading evidence ---- */
-    const ev = { found: false, foundWrong: false, cause: false, outputShown: {}, cancelledOthers: [], resumedWrong: [] };
+    const ev = { found: false, foundIds: {}, causeBase: false, causeM: false, cause: false, outputShown: {}, cancelledOthers: [], resumedWrong: [] };
 
     /* ---- helpers ---- */
     const running = n => jobs.filter(j => j.state === 'RUNNING' && j.node === n);
@@ -443,8 +459,10 @@ echo "Job $SLURM_JOB_ID finished on $(hostname) at $(date)"
       }
       rows.forEach(([j, st]) => lines.push(fields.map(f => cell(f, j, st)).join(o.P || o.p ? '|' : ' ') + (o.p ? '|' : '')));
       if (practice && !ev.found) {
-        const sawFailed = list.some(j => j.id === base);
-        if (sawFailed && cause === 'oom' && !(o.o && /maxrss/i.test(o.o) && !o.X)) sh.hint(`OUT_OF_MEMORY: compare what the job requested with what it used. MaxRSS is recorded per step, so leave out -X: sacct -j ${base} --format=JobID,State,ReqMem,MaxRSS,WorkDir`);
+        const sawFailed = list.some(j => j.id === base || (M && j.id === M.id));
+        const oomId = cause === 'oom' ? base : M ? M.id : null;
+        if (both && sawFailed && !(list.some(j => j.id === base) && list.some(j => j.id === M.id))) sh.hint('Two jobs failed today. Widen the search so both show up: -s FAILED,NODE_FAIL,TIMEOUT,OUT_OF_MEMORY.');
+        else if (oomId && list.some(j => j.id === oomId) && !(o.o && /maxrss/i.test(o.o) && !o.X)) sh.hint(`OUT_OF_MEMORY: compare what job ${oomId} requested with what it used. MaxRSS is recorded per step, so leave out -X: sacct -j ${oomId} --format=JobID,State,ReqMem,MaxRSS,WorkDir`);
         else if (!sawFailed && o.s && o.S === undefined && !o.j) sh.hint('With --state and no -S, sacct only looks at jobs active right now. Add -S today (or a time) to look back.');
         else if (!sawFailed && !o.a && me !== 'root' && !o.u && !o.j && !o.N) sh.hint('Without -a you only see your own jobs. The job that failed may belong to another user. Add -a.');
         else if (sawFailed && !o.o && !o.l) sh.hint('The default columns do not include the node. Add --format=JobID,JobName,User,State,ExitCode,NodeList (or check sinfo -R).');
@@ -603,8 +621,9 @@ echo "Job $SLURM_JOB_ID finished on $(hostname) at $(date)"
       body.forEach(l => {
         if (oomed) return;
         if (/^\s*(srun\s+)?python3?\s+(\S*\/)?train\.py\b/.test(l)) {
-          need = dataGiB * 1024;
-          lines.push(`Loading training shards into memory (${dataGiB}.0 GiB)...`);
+          const dg = (failedFor(scriptPath) || { data: dataGiB }).data;
+          need = dg * 1024;
+          lines.push(`Loading training shards into memory (${dg}.0 GiB)...`);
           if (memAvail < need) { lines.push(`slurmstepd: error: Detected 1 oom_kill event in StepId=${id}.batch. Some of the step tasks have been OOM Killed.`); oomed = true; runtime = 7000; return; }
           lines.push('Epoch 1/1: step 1000/1000 loss=0.4127', 'Saved checkpoint to checkpoints/epoch1.pt'); runtime += 6000; return;
         }
@@ -623,8 +642,9 @@ echo "Job $SLURM_JOB_ID finished on $(hostname) at $(date)"
       ctlLog(sh.now(), `_slurm_rpc_submit_batch_job: JobId=${id} InitPrio=1 usec=412`);
       sync();
       if (practice) {
-        if (scriptPath === ownerScript && j.user !== owner) sh.hint(`This job runs as ${j.user}, so it belongs to ${j.user} and its output lands in ${workdir}. The task asks for the owner: su - ${owner} -c "sbatch ${cause === 'oom' ? '--mem=64G ' : ''}${script}"`);
-        else if (oomed) sh.hint(`This job still asks for ${Math.round(memAvail / 1024)}G, but the script loads ${dataGiB} GiB, so it will run out of memory again. Ask for more with --mem on the sbatch command line.`);
+        const fo = failedFor(scriptPath);
+        if (fo && j.user !== fo.owner) sh.hint(`This job runs as ${j.user}, so it belongs to ${j.user} and its output lands in ${workdir}. The task asks for the owner: su - ${fo.owner} -c "sbatch ${fo.oom ? '--mem=64G ' : ''}${fo.script}"`);
+        else if (oomed) sh.hint(`This job still asks for ${Math.round(memAvail / 1024)}G, but the script loads ${need / 1024} GiB, so it will run out of memory again. Ask for more with --mem on the sbatch command line.`);
         else sh.hint(`Watch it with squeue -j ${id}. The output file appears in the submit directory once the job starts: ${stdout.replace(/\{NODE\}/g, '<node>')}`);
       }
       return ok(`Submitted batch job ${id}`);
@@ -781,7 +801,14 @@ echo "Job $SLURM_JOB_ID finished on $(hostname) at $(date)"
       id: 'slurm', params: P, shell: sh,
       title: 'Lab 1 · Slurm',
       intro: asRoot ? 'You are root on the cluster head node. Compute nodes: node001–node004.' : 'You are logged in to the cluster head node as student. Your account has sudo and Slurm operator rights. Compute nodes: node001–node004.',
-      tasks: () => [
+      tasks: () => both ? [
+        { id: 'find', text: 'Two jobs failed today. No job IDs are given: find both failed jobs, their owners and the nodes they ran on.' },
+        { id: 'cause', text: 'Find out why each job failed.' },
+        { id: 'restore', text: 'Fix the node problem and return the node to service.' },
+        { id: 'submit', text: 'Resubmit the job that failed because of the node, as its owner. When it completes, display its output file.' },
+        { id: 'submit2', text: 'Resubmit the job that ran out of memory, as its owner, with enough memory. When it completes, display its output file.' },
+        { id: 'drain', text: `Drain ${drainNode} for maintenance (use any reason) and confirm its state.` }
+      ] : [
         { id: 'find', text: 'A job failed today. No job ID is given: find the failed job, its owner and the node it ran on.' },
         { id: 'cause', text: 'Find out why it failed.' },
         { id: 'restore', text: 'Fix the cause of the failure. If a node was affected, return it to service.' },
@@ -790,7 +817,7 @@ echo "Job $SLURM_JOB_ID finished on $(hostname) at $(date)"
       ],
       commands: () => ['sinfo', 'squeue', 'sacct', 'scontrol', 'sbatch', 'scancel', 'srun', 'systemctl', 'journalctl', 'ssh', 'su', 'module', 'uptime', 'ping', 'munge', 'unmunge', 'remunge'],
       hosts: () => ['headnode'].concat(NODES),
-      users: () => [...new Set(['root', 'student', 'mlops', 'research', owner])],
+      users: () => [...new Set(['root', 'student', 'mlops', 'research', owner].concat(M ? [M.owner] : []))],
       sshBanner: h => `Welcome to Ubuntu 22.04.4 LTS (GNU/Linux 5.15.0-1063-nvidia x86_64)\n\nLast login: ${NL.dateCmd(sh.now() - 86400e3 * 2)} from 10.141.255.254`,
       which: n => ({ sinfo: 1, squeue: 1, sacct: 1, scontrol: 1, sbatch: 1, scancel: 1, srun: 1 })[n] ? BIN + n : ({ systemctl: '/usr/bin/systemctl', journalctl: '/usr/bin/journalctl', ssh: '/usr/bin/ssh' })[n] || null,
       man: page => ({
@@ -865,13 +892,18 @@ echo "Job $SLURM_JOB_ID finished on $(hostname) at $(date)"
         return undefined;
       },
       onDisplay(out) {
-        if (out.split('\n').some(l => l.includes(String(base)) && /NODE_FAIL|OUT_OF_ME/.test(l))) ev.found = true;
-        if (cause === 'oom' && (/oom_kill event in StepId=\d+/.test(out) && out.includes(String(base)) || out.includes(jobs.find(x => x.id === base).maxrss + 'K') || /Memory cgroup out of memory/.test(out))) ev.cause = true;
+        const lines = out.split('\n');
+        [base].concat(M ? [M.id] : []).forEach(id => { if (lines.some(l => new RegExp('(^|[\\s|])' + id + '([\\s|]|$)').test(l) && /NODE_FAIL|OUT_OF_ME/.test(l))) ev.foundIds[id] = true; });
+        ev.found = !!ev.foundIds[base] && (!M || !!ev.foundIds[M.id]);
+        const oomEvidence = (id, node) => (out.includes(`StepId=${id}.batch`) && /oom_kill/.test(out)) || out.includes(jobs.find(x => x.id === id).maxrss + 'K') || (/Memory cgroup out of memory/.test(out) && (!M || sh.host === node));
+        if (cause === 'oom' && oomEvidence(base, failNode)) ev.causeBase = true;
+        if (M && oomEvidence(M.id, M.node)) ev.causeM = true;
         if (sh.host === failNode) {
-          if (cause === 'crash' && /SEGV|segfault/.test(out) && /slurmd/.test(out)) ev.cause = true;
-          if (cause === 'munge' && /munge/i.test(out) && /(oom|Munge encode failed|munge\.socket)/i.test(out)) ev.cause = true;
-          if (cause === 'stopped' && /slurmd\.service/.test(out) && /(inactive \(dead\)|disabled;)/.test(out)) ev.cause = true;
+          if (cause === 'crash' && /SEGV|segfault/.test(out) && /slurmd/.test(out)) ev.causeBase = true;
+          if (cause === 'munge' && /munge/i.test(out) && /(oom|Munge encode failed|munge\.socket)/i.test(out)) ev.causeBase = true;
+          if (cause === 'stopped' && /slurmd\.service/.test(out) && /(inactive \(dead\)|disabled;)/.test(out)) ev.causeBase = true;
         }
+        ev.cause = ev.causeBase && (!M || ev.causeM);
         jobs.filter(j => j.mine && j.state === 'COMPLETED' && j.finalLine).forEach(j => { if (out.includes(j.finalLine)) ev.outputShown[j.id] = true; });
       },
       grade() {
@@ -883,9 +915,11 @@ echo "Job $SLURM_JOB_ID finished on $(hostname) at $(date)"
         const shown = okDone.filter(j => ev.outputShown[j.id]);
         const res = [];
         const stateWord = nodeFail ? 'NODE_FAIL' : 'OUT_OF_MEMORY';
-        res.push({ id: 'find', pass: ev.found, detail: ev.found ? `You displayed job ${base} (${failName}, owner ${owner}) in state ${stateWord} on ${failNode}.` : `The failed job was ${base} (${failName}), owned by ${owner}, ${stateWord} on ${failNode}. sacct -a -S today -s FAILED,NODE_FAIL,TIMEOUT,OUT_OF_MEMORY finds it${asRoot ? '' : ' (-a because it belongs to another user)'}.` });
+        if (both) res.push({ id: 'find', pass: ev.found, detail: ev.found ? `You displayed both failed jobs: ${base} (${failName}, ${owner}, NODE_FAIL on ${failNode}) and ${M.id} (${M.script}, ${M.owner}, OUT_OF_MEMORY on ${M.node}).` : `Two jobs failed: ${base} (${failName}, ${owner}, NODE_FAIL on ${failNode})${ev.foundIds[base] ? ' (found)' : ''} and ${M.id} (${M.script}, ${M.owner}, OUT_OF_MEMORY on ${M.node})${ev.foundIds[M.id] ? ' (found)' : ''}. sacct -S today -s FAILED,NODE_FAIL,TIMEOUT,OUT_OF_MEMORY shows both.` });
+        else res.push({ id: 'find', pass: ev.found, detail: ev.found ? `You displayed job ${base} (${failName}, owner ${owner}) in state ${stateWord} on ${failNode}.` : `The failed job was ${base} (${failName}), owned by ${owner}, ${stateWord} on ${failNode}. sacct -a -S today -s FAILED,NODE_FAIL,TIMEOUT,OUT_OF_MEMORY finds it${asRoot ? '' : ' (-a because it belongs to another user)'}.` });
         const causeText = { crash: 'slurmd crashed with a segfault (SIGSEGV); a restart fixes it', munge: 'munge was killed by the OOM killer, so slurmd could not authenticate and exited; start munge, then restart slurmd', stopped: 'the node rebooted and slurmd was disabled, so it never started; start (and enable) slurmd', oom: `the job used all ${reqMem}G it requested (MaxRSS reached ReqMem) and was OOM-killed; its output shows it loads ${dataGiB} GiB` }[cause];
-        res.push({ id: 'cause', pass: ev.cause, detail: ev.cause ? `You found it: ${causeText}.` : `Cause: ${causeText}. ` + (nodeFail ? `Evidence was on ${failNode} in systemctl status / ${SUDO}journalctl -u slurmd${cause === 'munge' ? ' and the munge service' : ''}.` : `Evidence: sacct -j ${base} --format=JobID,State,ReqMem,MaxRSS,WorkDir, or the job's output file ${ownerHome}/slurm-${base}.out.`) });
+        if (both) res.push({ id: 'cause', pass: ev.cause, detail: ev.cause ? `You found both: job ${base}: ${causeText}; job ${M.id}: it used all ${M.reqMem}G it requested and was OOM-killed (it loads ${M.dataGiB} GiB).` : `Job ${base}: ${causeText}${ev.causeBase ? ' (found)' : ` (check ${failNode}: systemctl status slurmd, ${SUDO}journalctl -u slurmd)`}. Job ${M.id}: it ran out of memory${ev.causeM ? ' (found)' : ` (sacct -j ${M.id} --format=JobID,State,ReqMem,MaxRSS, or ${M.home}/slurm-${M.id}.out)`}.` });
+        else res.push({ id: 'cause', pass: ev.cause, detail: ev.cause ? `You found it: ${causeText}.` : `Cause: ${causeText}. ` + (nodeFail ? `Evidence was on ${failNode} in systemctl status / ${SUDO}journalctl -u slurmd${cause === 'munge' ? ' and the munge service' : ''}.` : `Evidence: sacct -j ${base} --format=JobID,State,ReqMem,MaxRSS,WorkDir, or the job's output file ${ownerHome}/slurm-${base}.out.`) });
         if (nodeFail) {
           const restored = servicesUp(failNode) && !fnx.down && !fnx.drain && !fnx.noresp;
           let rd = restored ? `${failNode} is ${nstate(failNode).s} with slurmd running.` : !servicesUp(failNode) ? `slurmd${nodes[failNode].munge !== 'active' ? ' (and munge)' : ''} is still not running on ${failNode}.` : `slurmd is running, but ${failNode} is still ${nstate(failNode).s}. Resume it with scontrol update nodename=${failNode} state=resume.`;
@@ -904,6 +938,16 @@ echo "Job $SLURM_JOB_ID finished on $(hostname) at $(date)"
         else if (!shown.length) sd = `Job ${okDone[0].id} completed as ${owner}, but its output file (${okDone[0].stdout}) was never displayed after it finished.`;
         else sd = `Job ${shown[0].id} ran as ${owner}, completed, and you displayed ${shown[0].stdout}.`;
         res.push({ id: 'submit', pass: shown.length > 0, detail: sd });
+        if (M) {
+          const fm = jobs.filter(j => j.mine && j.script === M.path), om = fm.filter(j => j.user === M.owner), dm = om.filter(j => j.state === 'COMPLETED'), sm = dm.filter(j => ev.outputShown[j.id]);
+          let d2;
+          if (!fm.length) d2 = `${M.script} was never resubmitted. As root: su - ${M.owner} -c "sbatch --mem=64G ${M.script}"`;
+          else if (!om.length) d2 = `${M.script} was resubmitted as ${fm.map(j => j.user).join(', ')}, not as its owner ${M.owner}.`;
+          else if (!dm.length) { const last = om[om.length - 1]; d2 = last.state === 'OUT_OF_MEMORY' ? `Job ${last.id} asked for ${Math.round(last.mem / 1024)}G and ran out of memory again; it needs at least ${M.dataGiB}G (for example --mem=64G).` : `Job ${last.id} (as ${M.owner}) has not completed (${last.state}).`; }
+          else if (!sm.length) d2 = `Job ${dm[0].id} completed as ${M.owner}, but its output file (${dm[0].stdout}) was never displayed after it finished.`;
+          else d2 = `Job ${sm[0].id} ran as ${M.owner} with --mem=${Math.round(sm[0].mem / 1024)}G, completed, and you displayed ${sm[0].stdout}.`;
+          res.push({ id: 'submit2', pass: sm.length > 0, detail: d2 });
+        }
         // drain: judged on the end state only
         const drained = dn.drain && !!dn.reason;
         const otherDrained = NODES.filter(n => n !== drainNode && nodes[n].drain);
@@ -919,6 +963,14 @@ echo "Job $SLURM_JOB_ID finished on $(hostname) at $(date)"
         const submit = [`${SUDO}su - ${owner} -c "sbatch ${resub}"`];
         const after = [`squeue -u ${owner}`, '#  when the job has left the queue:', `${SUDO}cat ${ownerHome}/slurm-<jobid>.out`,
           `scontrol update nodename=${drainNode} state=drain reason="maintenance"`, 'sinfo -R'];
+        if (both) return find.concat([`#  ${base} (${owner}) is NODE_FAIL on ${failNode}; ${M.id} (${M.owner}) is OUT_OF_MEMORY on ${M.node}`,
+          `scontrol show node ${failNode}`, `ssh ${failNode}`, `${SUDO}systemctl status slurmd`, `${SUDO}journalctl -u slurmd -n 30 --no-pager`, `${SUDO}systemctl restart slurmd`, 'exit',
+          `scontrol update nodename=${failNode} state=resume`, 'sinfo',
+          `sacct -j ${M.id} --format=JobID,State,ReqMem,MaxRSS,WorkDir`, `${SUDO}cat ${M.home}/slurm-${M.id}.out`,
+          `#  MaxRSS reached ReqMem (${M.reqMem}G) and the job loads ${M.dataGiB} GiB: ask for more memory`,
+          `${SUDO}su - ${owner} -c "sbatch ${script}"`, `${SUDO}su - ${M.owner} -c "sbatch --mem=64G ${M.script}"`,
+          `squeue -u ${owner},${M.owner}`, '#  when both jobs have left the queue:', `${SUDO}cat ${ownerHome}/slurm-<jobid>.out`, `${SUDO}cat ${M.home}/slurm-<jobid>.out`,
+          `scontrol update nodename=${drainNode} state=drain reason="maintenance"`, 'sinfo -R']);
         if (cause === 'oom') return find.concat([`sacct -j ${base} --format=JobID,State,ReqMem,MaxRSS,WorkDir`, `${SUDO}cat ${ownerHome}/slurm-${base}.out`, `${SUDO}grep SBATCH ${ownerScript}`,
           `#  MaxRSS reached ReqMem (${reqMem}G) and the job loads ${dataGiB} GiB: ask for more memory on the command line`], submit, after);
         const fix = { crash: [`${SUDO}systemctl restart slurmd`], munge: [`${SUDO}systemctl status munge`, `${SUDO}systemctl start munge`, `${SUDO}systemctl restart slurmd`], stopped: [`${SUDO}systemctl enable --now slurmd`] }[cause];

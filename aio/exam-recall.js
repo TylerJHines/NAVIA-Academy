@@ -11,7 +11,7 @@
   let timerId = null;
   let examLimit = 20; // minutes for new exam sessions; changed with the Time limit menu
 
-  let loginUser = 'root', slurmVariant = 'node'; // Labs 1 and 2 log in as root like the exam, or as student with sudo
+  let loginUser = 'root', slurmVariant = 'both'; // Labs 1 and 2 log in as root like the exam, or as student with sudo
   try { const m = localStorage.getItem('navia-aio-lab-mode'); if (m === 'exam' || m === 'practice') mode = m; } catch (e) { /* storage unavailable */ }
   try { const u = localStorage.getItem('navia-aio-lab-user'); if (u === 'root' || u === 'student') loginUser = u; } catch (e) { /* storage unavailable */ }
 

@@ -109,8 +109,9 @@
     <div id="practice-variant" class="row" hidden>
       <label class="small">Practice scenario
         <select id="slurm-variant">
-          <option value="node">Node failure (slurmd)</option>
-          <option value="oom">Job ran out of memory</option>
+          <option value="both" selected>Both failures (full drill)</option>
+          <option value="node">Node failure only (slurmd)</option>
+          <option value="oom">Out-of-memory job only</option>
         </select>
       </label>
     </div>
@@ -153,10 +154,10 @@
   </section>
 </div>
 
-<script src="lab-core.js?v=9"></script>
-<script src="lab-slurm.js?v=9"></script>
-<script src="lab-k8s.js?v=9"></script>
-<script src="lab-bcm.js?v=9"></script>
-<script src="exam-recall.js?v=9"></script>
+<script src="lab-core.js?v=10"></script>
+<script src="lab-slurm.js?v=10"></script>
+<script src="lab-k8s.js?v=10"></script>
+<script src="lab-bcm.js?v=10"></script>
+<script src="exam-recall.js?v=10"></script>
 </body>
 </html>

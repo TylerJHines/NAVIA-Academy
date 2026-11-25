@@ -63,8 +63,23 @@ for (let seed = 1; seed <= 120; seed++) {
     run(`cm-kubernetes-setup -c ${P.cfgPath}`);
     allPass(t, 'bcm seed ' + seed); }
 }
-// practice scenarios: both Lab 1 variants, both users
+// practice scenarios: each Lab 1 variant, both users
 ['node', 'oom'].forEach(v => ['root', 'student'].forEach(u => { const t = make('slurm', 1, 'practice', u, v); solveSlurm(t, u); allPass(t, `slurm practice ${v} ${u}`); }));
+function solveBoth(t, user) {
+  const P = t.P, M = P.oomJob, run = t.run, S = user === 'root' ? '' : 'sudo ';
+  run(`sacct ${user === 'root' ? '' : '-a '}-S today -s F,NF,TO,OOM -X -o JobID,User,State,NodeList`);
+  run(`sacct -j ${M.id} --format=JobID,State,ReqMem,MaxRSS,WorkDir`);
+  run(`ssh ${P.failNode} ${S}systemctl status slurmd`); run(`ssh ${P.failNode} ${S}systemctl restart slurmd`);
+  run(`scontrol update nodename=${P.failNode} state=resume`);
+  const a = run(`${S}su - ${P.owner} -c "sbatch ${P.script}"`).split(' ').pop();
+  const b = run(`${S}su - ${M.owner} -c "sbatch --mem=64G ${M.script}"`).split(' ').pop();
+  t.wait(40); run(`${S}cat /home/${P.owner}/slurm-${a}.out`); run(`${S}cat /home/${M.owner}/slurm-${b}.out`);
+  run(`scontrol update nodename=${P.drainNode} state=drain reason=maint`);
+}
+['root', 'student'].forEach(u => { const t = make('slurm', 1, 'practice', u, 'both'); solveBoth(t, u); allPass(t, `slurm practice both ${u}`); });
+{ const t = make('slurm', 1, 'practice', 'root', 'both'); t.run('sacct -S today -s NF -X'); assert(failed(t, 'find'), 'finding only one of the two failed jobs must not pass'); }
+{ const t = make('slurm', 1, 'practice', 'root', 'both'); solveBoth(t, 'root'); assert(t.lab.grade().results.length === 6, 'the both drill has six checks'); }
+{ const t = make('slurm', 1, 'practice', 'root', 'both'); const id = t.run('su - lee -c "sbatch finetune.sh"').split(' ').pop(); t.wait(40); t.run(`cat /home/lee/slurm-${id}.out`); assert(failed(t, 'submit2'), 'resubmitting the OOM job without more memory must fail'); }
 ['root', 'student'].forEach(u => { const t = make('k8s', 1, 'practice', u); solveK8s(t); allPass(t, `k8s practice ${u}`); });
 
 /* ---- mistakes must be caught ---- */
