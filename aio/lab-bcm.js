@@ -510,8 +510,30 @@ modules:
       const arr = x => Array.isArray(x) ? x.map(String) : x ? [String(x)] : [];
       return { name: String(k.cluster_name || 'default'), version: String(k.version || '1.30'), podNet: k.pod_network, svcNet: k.service_network, controlPlane: arr(k.control_plane && k.control_plane.nodes), etcd: arr(k.etcd && k.etcd.nodes), workers: arr(k.workers && k.workers.categories), nodes: arr(k.workers && k.workers.nodes), gpuOperator: !!(k.addons && k.addons.nvidia_gpu_operator) };
     }
+    /* what a saved/deployed configuration is missing compared with task 5 (practice hints only) */
+    function configProblems(c, path) {
+      const p = [];
+      if (path && path !== P.cfgPath) p.push(`it was saved to ${path}, but the task asks for ${P.cfgPath}`);
+      if (!c.controlPlane.includes('headnode')) p.push('the head node is not the control plane');
+      if (!c.workers.includes(P.category)) p.push(`${P.category} is not a worker category`);
+      if (!c.gpuOperator) p.push('the NVIDIA GPU Operator is not selected');
+      return p;
+    }
+    function uninstall() {
+      if (!k8s) return fail('Error: no Kubernetes cluster is installed.');
+      const name = k8s.name;
+      const stages = (k8s.gpuOperator ? ['Remove NVIDIA GPU Operator'] : []).concat(['Remove Calico Network Plugin', 'Remove Kubernetes Roles', 'Remove Kubernetes Configuration Overlays', 'Clean Up Etcd Data', `Remove Kubernetes Cluster ${name}`]);
+      const lines = [`Executing ${stages.length * 2} stages`, `################### Starting execution for 'Kubernetes Uninstall'`, 'Connecting to CMDaemon', '- kubernetes'];
+      stages.forEach((st, i) => lines.push(`## Progress: ${Math.round(i * 100 / stages.length)}`, `#### stage: kubernetes: ${st}`));
+      lines.push('## Progress: 100', '', `Took: 0${NL.int(r, 1, 3)}:${String(NL.int(r, 0, 59)).padStart(2, '0')} min.`, 'Progress: 100/100', `################### Finished execution for 'Kubernetes Uninstall', status: completed`, '', 'Kubernetes Uninstall finished!');
+      k8s = null; moduleLoaded = false;
+      sh.advance(2 * 60e3);
+      if (practice) sh.hint(`Kubernetes is removed. The saved configuration file is still there: fix it (run the wizard again, or edit the file), then deploy with cm-kubernetes-setup -c ${P.cfgPath}.`);
+      return ok(lines.join('\n'));
+    }
     function deploy(c, path, method) {
-      if (k8s) return fail(`Error: a Kubernetes cluster named '${k8s.name}' is already deployed. Uninstall it first.`);
+      if (k8s) return fail(`Error: a Kubernetes cluster named '${k8s.name}' is already deployed. Uninstall it first: run cm-kubernetes-setup and choose Uninstall, or cm-kubernetes-setup --remove.`);
+      if (practice) { const pr = configProblems(c, null); if (pr.length) sh.hint(`This deploys a configuration where ${pr.join(', and ')}. If that was a mistake, remove it afterwards with cm-kubernetes-setup --remove, fix the configuration and deploy again.`); }
       if (!c.controlPlane.length) return fail('Error: the configuration has no control plane nodes');
       const unknownCat = c.workers.filter(x => !committed('category', x));
       if (unknownCat.length) return fail(`Error: category ${unknownCat[0]} does not exist`);
@@ -541,7 +563,7 @@ modules:
       const pickList = s => { const t = s.trim(); if (!t) return []; return t.split(/[,\s]+/).filter(Boolean).map(x => parseInt(x, 10)); };
       let i = 0, deployAfter = false;
       const steps = [
-        { show: () => box('Kubernetes Setup', ['Select an operation:', '', '  1) Deploy      Install Kubernetes on this cluster', '  2) Uninstall   Remove a Kubernetes cluster', '  3) Exit']) , ask: 'Select [1-3]: ', on: v => { if (v === '1') return 1; if (v === '2') return { end: k8s ? 'Uninstall is disabled in this lab.' : 'No Kubernetes cluster is installed.' }; if (v === '3' || v === 'q') return { end: 'Exiting cm-kubernetes-setup.' }; return { err: 'Please enter 1, 2 or 3.' }; } },
+        { show: () => box('Kubernetes Setup', ['Select an operation:', '', '  1) Deploy      Install Kubernetes on this cluster', '  2) Uninstall   Remove a Kubernetes cluster', '  3) Exit']) , ask: 'Select [1-3]: ', on: v => { if (v === '1') return 1; if (v === '2') return k8s ? { goto: RM } : { end: 'No Kubernetes cluster is installed.' }; if (v === '3' || v === 'q') return { end: 'Exiting cm-kubernetes-setup.' }; return { err: 'Please enter 1, 2 or 3.' }; } },
         { show: () => box('Kubernetes version', ['  1) v1.31', '  2) v1.30   (recommended)', '  3) v1.29']), ask: 'Select [2]: ', on: v => { const m = { '': '1.30', '1': '1.31', '2': '1.30', '3': '1.29' }[v]; if (!m) return { err: 'Please enter 1, 2 or 3.' }; c.version = m; return 1; } },
         { show: () => box('Cluster name', ['Name of the Kubernetes cluster as shown in cmsh kubernetes mode.']), ask: 'Cluster name [default]: ', on: v => { if (v && !HOST.test(v)) return { err: 'Invalid name.' }; c.name = v || 'default'; return 1; } },
         { show: () => box('Kubernetes networks', [`Pod network:      ${c.podNet}`, `Service network:  ${c.svcNet}`, 'These must not overlap with existing cluster networks.']), ask: 'Accept these networks? [Y/n]: ', on: v => /^(|y|yes)$/i.test(v) ? 1 : { err: 'Custom networks are not simulated; press Enter to accept.' } },
@@ -556,11 +578,14 @@ modules:
           const e = sh.write(path, configText(c));
           if (e) { if (practice) sh.hint(`The directory ${NL.dirname(path)} does not exist. Type q to leave, mkdir -p ${NL.dirname(path)}, and run the wizard again (or pick another path).`); return { err: `Error: cannot write ${path}: ${e}` }; }
           const saved = `Configuration saved to ${path}`;
-          if (!deployAfter) { if (practice) sh.hint(`Deploy from the saved file with: cm-kubernetes-setup -c ${path}`); return { end: saved + `\nTo deploy later, run: cm-kubernetes-setup -c ${path}` }; }
+          if (practice) { const pr = configProblems(c, path); if (pr.length) sh.hint(`Saved, but this does not match task 5: ${pr.join('; ')}. Run cm-kubernetes-setup again and save over it before you deploy.`); else if (!deployAfter) sh.hint(`Deploy from the saved file with: cm-kubernetes-setup -c ${path}`); }
+          if (!deployAfter) return { end: saved + `\nTo deploy later, run: cm-kubernetes-setup -c ${path}` };
           const d = deploy(c, path, 'wizard');
           return { end: saved + '\n' + (d.err || d.out) };
         } }
       ];
+      const RM = steps.length;
+      steps.push({ show: () => box('Uninstall Kubernetes', [`This removes the Kubernetes cluster '${k8s ? k8s.name : ''}' and its operators from all nodes.`, 'Saved configuration files are kept.']), ask: `Remove Kubernetes cluster '${k8s ? k8s.name : ''}'? [y/N]: `, on: v => { if (/^(y|yes)$/i.test(v)) { const u = uninstall(); return { end: u.err || u.out }; } if (/^(|n|no)$/i.test(v)) return { end: 'Uninstall cancelled.' }; return { err: 'Please answer y or n.' }; } });
       let pending = '';
       const render = () => [steps[i].show(), pending].filter(Boolean).join('\n');
       sh.interactive = {
@@ -568,9 +593,11 @@ modules:
         input(line) {
           const v = line.trim();
           if (v === 'q' && i > 0) { sh.interactive = null; return 'Setup aborted.'; }
+          if (v === 'b' && i === RM) { i = 0; return render(); }
           if (v === 'b' && i > 1) { i--; return render(); }
           const res = steps[i].on(v);
           if (res === 1) { i++; return render(); }
+          if (res.goto !== undefined) { i = res.goto; return render(); }
           if (res.err) return res.err;
           if (res.end) { sh.interactive = null; return res.end; }
           return '';
@@ -615,6 +642,7 @@ modules:
         if (c === 'cm-kubernetes-setup') {
           const a = argv.slice(1);
           if (a.includes('-h') || a.includes('--help')) return ok('usage: cm-kubernetes-setup [-h] [-c CONFIG] [--remove] [--skip-packages]\n\noptions:\n  -c CONFIG    Load configuration from file and deploy\n  --remove     Remove a Kubernetes setup');
+          if (a.includes('--remove')) return uninstall();
           const ci = a.indexOf('-c');
           if (ci >= 0) {
             const f = a[ci + 1]; if (!f) return fail('cm-kubernetes-setup: error: argument -c: expected one argument', 2);
@@ -680,7 +708,7 @@ modules:
         let cerr = '';
         if (ct === undefined) cerr = `No configuration file at ${P.cfgPath}.`;
         else { try { const conf = parseConfig(ct); if (!conf.workers.includes(P.category)) cerr = `The saved configuration does not use ${P.category} as a worker category (it has: ${conf.workers.join(', ') || 'none'}).`; else if (!conf.gpuOperator) cerr = 'The saved configuration does not install the NVIDIA GPU Operator (answer y at the operator step).'; else if (!conf.controlPlane.includes('headnode')) cerr = `The saved configuration does not use the head node as the control plane (${conf.controlPlane.join(', ')}).`; } catch (e) { cerr = `${P.cfgPath} is not a valid setup configuration: ${e.message}`; } }
-        res.push({ id: 'config', pass: !cerr, detail: cerr || `${P.cfgPath} has control plane headnode and worker category ${P.category}.` });
+        res.push({ id: 'config', pass: !cerr, detail: cerr || `${P.cfgPath} has control plane headnode, worker category ${P.category} and the NVIDIA GPU Operator.` });
         let derr = '';
         if (!k8s) derr = 'Kubernetes was not deployed.';
         else if (k8s.configPath !== P.cfgPath) derr = `Kubernetes was deployed from ${k8s.configPath}, not ${P.cfgPath}.`;

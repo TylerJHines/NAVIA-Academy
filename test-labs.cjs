@@ -106,6 +106,17 @@ function solveBoth(t, user) {
 { const t = make('bcm', 1, 'practice'); ['cmsh', 'softwareimage', 'clone default-image dgx-training', 'category', 'clone default gpu-training', 'set softwareimage dgx-training'].forEach(t.run); assert(/not committed/.test(t.log[t.log.length - 1]), 'referencing an uncommitted image must fail'); }
 { const t = make('bcm', 1, 'practice'); ['cmsh -c "category; clone default gpu-training; commit"', 'cm-kubernetes-setup', '1', '', '', '', '1', '2', '', '', '', '2', ''].forEach(t.run); assert(failed(t, 'config'), 'a config without the GPU Operator must fail (it is not pre-selected)'); }
 
+{ const t = make('bcm', 1, 'practice'); const P = t.P;
+  ['cmsh -c "softwareimage; clone default-image dgx-training; commit"', 'cmsh -c "category; clone default gpu-training; set softwareimage dgx-training; commit"',
+   'cmsh -c "device; add physicalnode gpu004 10.141.0.44; set category gpu-training; set mac 02:00:00:00:04:04; commit; power on"',
+   'cm-kubernetes-setup', '1', '', '', '', '1', '2', '', '', '', '2', '', 'cm-kubernetes-setup -c /root/cm-kubernetes-setup.conf'].forEach(t.run);
+  assert(failed(t, 'deploy'), 'deploying without the GPU Operator must fail');
+  assert(/already deployed/.test(t.run('cm-kubernetes-setup -c /root/cm-kubernetes-setup.conf')), 'a second deploy must be refused');
+  ['cm-kubernetes-setup', '2', 'y'].forEach(t.run);
+  ['cm-kubernetes-setup', '1', '', '', '', '1', '2', '', '', 'y', '2', '', 'cm-kubernetes-setup -c /root/cm-kubernetes-setup.conf'].forEach(t.run);
+  allPass(t, 'bcm recover with wizard uninstall');
+  t.run('cm-kubernetes-setup --remove'); assert(failed(t, 'deploy'), '--remove must uninstall'); }
+
 /* ---- command forms from a candidate's lab drill must all be accepted (one-liners and navigated) ---- */
 const BAD = /command not found|Unknown command|unrecognized|invalid option|Invalid (field|format|node|job)|Unable to|(?<!slurmstepd: )error:/i;
 function accepts(id, cmds, user, variant) {
