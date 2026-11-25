@@ -1,51 +1,323 @@
-/* Independent scenario trainer based on an unverified candidate recollection. */
-(()=>{'use strict';
-const scenarios={slurm:{title:'Lab 1 · Slurm — discover, recover, submit, drain',brief:'A training job failed today. No job ID is supplied. Find its failure, restore the affected worker, submit job.sh, inspect its output, then drain node001 for maintenance.',objectives:['Identify failed job from accounting','Inspect node and daemon logs','Repair slurmd, resume node002, verify IDLE','Submit job.sh and inspect the new output','Drain node001 and verify its state'],},k8s:{title:'Lab 2 · Kubernetes — jobs and workloads',brief:'Load the Kubernetes module. Create a Job manifest at /home/student/jobs/training.yaml using image busybox:1.36 and a workload manifest at /home/student/workloads/inference.yaml using image nginx:1.27. Apply both, inspect job logs and verify the workload pod.',objectives:['Load module and inspect nodes','Write Job YAML at exact path','Apply Job and read its logs','Write and apply workload YAML','Verify running pods'],},bcm:{title:'Lab 3 · BCM — image, category, node, Kubernetes',brief:'Clone default-image to dgx-training, clone default category to gpu-training, associate the new image with the category, register physical node gpu004 at 10.10.0.44 with MAC 02:00:00:00:04:04, and prepare/deploy a Kubernetes configuration.',objectives:['Clone and commit software image','Clone and commit category','Assign image to category and commit','Register physical node with category and MAC','Save wizard configuration, deploy, verify Kubernetes']}};
-let active='slurm',s,history=[];const $=id=>document.getElementById(id),esc=x=>String(x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-function reset(){s={module:false,files:{},jobApplied:false,workloadApplied:false,jobLogs:false,podsSeen:false,kNodes:false,kJobs:false,slurm:{restarted:false,resumed:false,submitted:false,output:false,drained:false,found:false,inspected:false,logs:false,queue:false},bcm:{mode:'',selected:'',images:['default-image'],categories:{default:{image:'default-image'}},nodes:{},imageCloned:false,categoryCloned:false,assigned:false,nodeAdded:false,config:false,deployed:false,staged:{}},commands:0};history=[];render()}
-function done(){let a=s.slurm,b=s.bcm;return active==='slurm'?[a.found,a.inspected&&a.logs,a.restarted&&a.resumed&&a.verified,a.submitted&&a.output,a.drained&&a.drainVerified]:active==='k8s'?[s.module&&s.kNodes,!!s.files['/home/student/jobs/training.yaml'],s.jobApplied&&s.kJobs&&s.jobLogs,!!s.files['/home/student/workloads/inference.yaml']&&s.workloadApplied,s.podsSeen]:[b.imageCloned,b.categoryCloned,b.assigned,b.nodeAdded,b.config&&b.deployed]}
-function render(){const c=scenarios[active],d=done();$('recall-title').textContent=c.title;$('recall-brief').textContent=c.brief;$('recall-steps').innerHTML=c.objectives.map((o,i)=>`<li style="margin:7px 0;color:${d[i]?'#62d5a0':'inherit'}">${d[i]?'✓':'○'} ${esc(o)}</li>`).join('');$('recall-progress').textContent=d.filter(Boolean).length+'/5 objectives';$('recall-output').textContent=history.map(h=>'$ '+h[0]+'\n'+h[1]).join('\n\n')||'Scenario initialized. Type help to see supported commands.';$('recall-output').scrollTop=$('recall-output').scrollHeight}
-function run(raw){let cmd=raw.trim(),a=cmd.split(/\s+/),b=s.bcm,z=s.slurm;if(!cmd)return '';if(cmd==='help')return active==='slurm'?'sinfo -R | squeue | sacct -S today --state=FAILED,NODE_FAIL,TIMEOUT | scontrol show node node002 | journalctl -u slurmd | systemctl restart slurmd | scontrol update nodename=node002 state=resume | sbatch job.sh | scontrol show job JOBID | cat slurm-JOBID.out | scontrol update nodename=node001 state=drain reason="maint"':active==='k8s'?'module load kubernetes | kubectl get nodes | nano /home/student/jobs/training.yaml | kubectl apply -f PATH | kubectl get jobs | kubectl logs job/training | nano /home/student/workloads/inference.yaml | kubectl get pods | kubectl run NAME --image=IMAGE':'cmsh | softwareimage | category | device | clone default-image dgx-training | clone default gpu-training | use gpu-training | set softwareimage dgx-training | add physicalnode gpu004 10.10.0.44 | set category gpu-training | set mac 02:00:00:00:04:04 | commit | exit | cm-kubernetes-setup';
-if(active==='slurm'){
-if(cmd==='sinfo -R')return 'REASON                 USER      TIMESTAMP           NODELIST\nslurmd not responding  root      today 08:42         node002\nmaintenance            root      today 09:00         node001 (initially idle; maintenance scheduled)';
-if(cmd==='sinfo'||cmd==='sinfo -N'){if(z.resumed)z.verified=true;if(z.drained)z.drainVerified=true;return `PARTITION AVAIL NODES STATE NODELIST\ngpu up 1 ${z.drained?'drain':'idle'} node001\ngpu up 1 ${z.resumed?'idle':'down'} node002`;}
-if(cmd==='squeue'||cmd.startsWith('squeue ')){z.queue=true;return z.submitted?'JOBID PARTITION NAME USER ST TIME NODES NODELIST\n5822 gpu training student R 0:02 1 node002':'JOBID PARTITION NAME USER ST TIME NODES NODELIST\n(no current jobs; inspect accounting for historical failures)'}
-if(cmd.startsWith('sacct')){if(!cmd.includes('--state='))return 'JobID JobName State\n5817 training NODE_FAIL';z.found=true;return 'JobID JobName State ExitCode NodeList\n5817 training NODE_FAIL 0:0 node002'}
-if(/^scontrol show job (5817|5822)$/.test(cmd)){if(cmd.endsWith('5817')){z.found=true;return 'JobId=5817 JobState=NODE_FAIL NodeList=node002 Reason=NodeDown StdOut=/home/student/slurm-5817.out'}return z.submitted?'JobId=5822 JobState=COMPLETED NodeList=node002 StdOut=/home/student/slurm-5822.out':'slurm_load_jobs error: Invalid job id specified'}
-if(/^scontrol show node node002$/i.test(cmd)){z.inspected=true;return `NodeName=node002 State=${z.resumed?'IDLE':'DOWN'} Reason=${z.resumed?'None':'slurmd not responding'} Gres=gpu:8`}
-if(/^(sudo )?(journalctl -u (slurmd|slurmctld)( -n \d+)?|systemctl status slurmd)$/.test(cmd)){z.logs=true;return z.restarted?'slurmd: active (running); registered with slurmctld':'slurmd: inactive (failed); connection to slurmctld lost at 08:42'}
-if(/^(sudo )?systemctl restart slurmd$/.test(cmd)){z.restarted=true;return 'slurmd restarted; node must still be resumed in Slurm'}
-if(/^scontrol update nodename=node002 state=resume$/i.test(cmd)){if(!z.restarted)return 'error: node daemon still unavailable; restart slurmd first';z.resumed=true;return 'node002 set to IDLE'}
-if(cmd==='sbatch job.sh'){if(!z.resumed||!z.verified)return 'sbatch: error: Requested node resources unavailable';z.submitted=true;return 'Submitted batch job 5822'}
-if(/^cat (\/home\/student\/)?slurm-5822.out$/.test(cmd)){if(!z.submitted)return 'cat: file not found';z.output=true;return 'Training workload completed successfully\nGPU count: 8'}
-if(/^scontrol update nodename=node001 state=drain reason=("maint"|maint)$/i.test(cmd)){z.drained=true;return 'node001 drained for maint'}
-return 'Unsupported or invalid command for this scenario. Type help.'}
-if(active==='k8s'){
-if(cmd==='module load kubernetes'){s.module=true;return 'kubernetes module loaded; kubectl available'}
-if(!s.module)return 'kubectl: command not found. Load module first.';
-if(cmd==='kubectl get nodes'){s.kNodes=true;return 'NAME STATUS ROLES\nnode001 Ready worker\nnode002 Ready worker'}
-if(/^nano \/\S+\.ya?ml$/.test(cmd))return 'Use the manifest editor below: choose a path, paste YAML, then Save manifest. The terminal nano command does not edit files.';
-if(/^kubectl apply -f (\S+)$/.test(cmd)){let path=a[3],yaml=s.files[path];if(!yaml)return `error: ${path}: no such file`;if(!/apiVersion\s*:\s*(batch\/v1|v1|apps\/v1)/.test(yaml))return 'error: manifest requires supported apiVersion/kind';if(/kind\s*:\s*Job\b/.test(yaml)){if(!/apiVersion\s*:\s*batch\/v1/.test(yaml)||!/name\s*:\s*training\b/.test(yaml)||!/image\s*:\s*busybox:1\.36/.test(yaml)||!/restartPolicy\s*:\s*(Never|OnFailure)/.test(yaml))return 'error: expected Job named training using busybox:1.36';s.jobApplied=true;return 'job.batch/training created'}if(/kind\s*:\s*(Pod|Deployment)\b/.test(yaml)){if(!/image\s*:\s*nginx:1\.27/.test(yaml)||(/kind\s*:\s*Deployment\b/.test(yaml)&&!/apiVersion\s*:\s*apps\/v1/.test(yaml)))return 'error: workload must use nginx:1.27';s.workloadApplied=true;return 'workload configured'}return 'error: unsupported manifest kind'}
-if(cmd==='kubectl get jobs'){s.kJobs=s.jobApplied;return s.jobApplied?'NAME COMPLETIONS DURATION AGE\ntraining 1/1 3s 10s':'No resources found'}
-if(cmd==='kubectl logs job/training'){if(!s.jobApplied)return 'Error from server (NotFound): jobs.batch "training" not found';s.jobLogs=true;return 'Training job complete'}
-if(cmd==='kubectl get pods'){s.podsSeen=s.workloadApplied;return (s.jobApplied?'training-abc 0/1 Completed\n':'')+(s.workloadApplied?'inference 1/1 Running':'No running workload')}
-if(/^kubectl run \S+ --image=\S+$/.test(cmd)){if(!cmd.includes('--image=nginx:1.27'))return 'Wrong image for this scenario';s.workloadApplied=true;return 'pod/'+a[2]+' created'}
-return 'Unsupported Kubernetes command. Type help.'}
-if(cmd==='cmsh'){b.mode='root';return 'BCM shell opened. Enter softwareimage, category, or device.'}
-if(cmd==='exit'){b.mode='';b.selected='';return 'Exited cmsh.'}
-if(cmd==='cm-kubernetes-setup'){if(!b.nodeAdded||!b.assigned)return 'Configure the software image, category, and physical node before Kubernetes setup';b.config=true;s.files['/home/student/kubernetes.conf']='cluster: gpu-training\nnode: gpu004';return 'Wizard completed; saved configuration to /home/student/kubernetes.conf. Deploy with cm-kubernetes-setup -c /home/student/kubernetes.conf'}
-if(/^cm-kubernetes-setup (?:-c|--config) \/home\/student\/kubernetes\.conf$/.test(cmd)){if(!b.config||!b.nodeAdded||!b.assigned)return 'Setup prerequisites missing: configure image, category, and node first';b.deployed=true;return 'Kubernetes configuration deployed (simulated); verify using module load kubernetes and kubectl get nodes'}
-if(!b.mode)return 'Enter cmsh or run cm-kubernetes-setup.';
-if(['softwareimage','category','device'].includes(cmd)){b.mode=cmd;b.selected='';return 'Entered '+cmd+' mode'}
-if(cmd==='list')return b.mode==='softwareimage'?b.images.join('\n'):b.mode==='category'?Object.keys(b.categories).join('\n'):Object.keys(b.nodes).join('\n')||'(none)';
-if(/^clone \S+ \S+$/.test(cmd)){if(b.mode==='softwareimage'&&a[1]==='default-image'){b.images.push(a[2]);b.selected=a[2];b.staged.cloneImage=true;return 'Cloned image; commit to save'}if(b.mode==='category'&&a[1]==='default'){b.categories[a[2]]={image:'default-image'};b.selected=a[2];b.staged.cloneCategory=true;return 'Cloned category; commit to save'}return 'Clone source not found in current mode'}
-if(/^use \S+$/.test(cmd)){let n=a[1];if(b.mode==='category'&&b.categories[n]||b.mode==='softwareimage'&&b.images.includes(n)||b.mode==='device'&&b.nodes[n]){b.selected=n;return 'Selected '+n}return 'Unknown object'}
-if(/^add physicalnode \S+ \S+$/.test(cmd)&&b.mode==='device'){b.nodes[a[2]]={ip:a[3],category:'',mac:''};b.selected=a[2];return 'Staged physical node '+a[2]}
-if(/^set (softwareimage|category|mac) \S+$/.test(cmd)){if(!b.selected)return 'Select an object first';if(a[1]==='softwareimage'&&b.mode==='category'){if(!b.images.includes(a[2]))return 'Unknown software image';b.categories[b.selected].image=a[2];b.staged.assign=true;return 'Staged softwareimage'}if(b.mode==='device'&&['category','mac'].includes(a[1])){if(a[1]==='category'&&!b.categories[a[2]])return 'Unknown category';b.nodes[b.selected][a[1]]=a[2];return 'Staged '+a[1]}return 'Invalid property in current mode'}
-if(cmd==='commit'){if(b.staged.cloneImage)b.imageCloned=true;if(b.staged.cloneCategory){if(!b.imageCloned)return 'Commit the cloned software image first';b.categoryCloned=true}if(b.staged.assign){if(!b.imageCloned||!b.categoryCloned)return 'Image and category must be committed first';b.assigned=true}if(b.mode==='device'&&b.selected&&b.nodes[b.selected].category&&b.nodes[b.selected].mac&&b.assigned)b.nodeAdded=true;b.staged={};return 'Changes committed'}
-return 'Unsupported BCM command. Type help.'}
-function submit(){let inp=$('recall-command'),cmd=inp.value.trim();if(!cmd)return;let out=run(cmd);history.push([cmd,out]);s.commands++;inp.value='';render();inp.focus()}
-function saveManifest(){if(active!=='k8s')return;let path=$('recall-path').value.trim(),yaml=$('recall-yaml').value;if(!/^\/home\/student\/[^\s]+\.ya?ml$/.test(path)){alert('Use an absolute YAML path under /home/student/');return}if(!/^\s*apiVersion\s*:/m.test(yaml)||!/^\s*kind\s*:/m.test(yaml)||!/^\s*metadata\s*:/m.test(yaml)){alert('Manifest needs apiVersion, kind, and metadata');return}s.files[path]=yaml;history.push(['save '+path,'Saved YAML ('+yaml.length+' characters)']);render()}
-function start(){document.querySelectorAll('[data-recall]').forEach(el=>el.addEventListener('click',()=>{active=el.dataset.recall;reset();$('recall-editor').hidden=active!=='k8s'}));$('recall-submit').addEventListener('click',submit);$('recall-command').addEventListener('keydown',e=>{if(e.key==='Enter')submit()});$('recall-reset').addEventListener('click',reset);$('recall-save').addEventListener('click',saveManifest);reset()}
-document.addEventListener('DOMContentLoaded',start);
+/* NAVIA NCP-AIO three-lab simulator – page controller (practice and exam modes).
+ * Lab engines live in lab-core.js, lab-slurm.js, lab-k8s.js and lab-bcm.js. */
+(function () {
+  'use strict';
+  const NL = window.NaviaLab;
+  const $ = id => document.getElementById(id);
+  const LABS = ['slurm', 'k8s', 'bcm'];
+  const MAX_LINES = 2500;
+  let mode = 'practice', active = 'slurm';
+  const sessions = { practice: {}, exam: {} };
+  let timerId = null;
+  let examLimit = 20; // minutes for new exam sessions; changed with the Time limit menu
+
+  try { const m = localStorage.getItem('navia-aio-lab-mode'); if (m === 'exam' || m === 'practice') mode = m; } catch (e) { /* storage unavailable */ }
+
+  function newSeed() {
+    try { const a = new Uint32Array(1); crypto.getRandomValues(a); return 100000 + (a[0] % 900000); } catch (e) { return 100000 + Math.floor(Math.random() * 900000); }
+  }
+  function makeSession(m, id, seed) {
+    const lab = NL.labs[id].create({ mode: m, seed: seed });
+    return { id: id, lab: lab, seed: seed, lines: [], hist: [], hi: 0, draft: '', started: Date.now(), limit: m === 'exam' ? examLimit : 0, submitted: null, cmds: 0, report: null };
+  }
+  function cur() {
+    let s = sessions[mode][active];
+    if (!s) s = sessions[mode][active] = makeSession(mode, active, mode === 'practice' ? 1 : newSeed());
+    return s;
+  }
+
+  /* ---------- terminal ---------- */
+  const body = () => $('term-body');
+  let inputEl = null, promptEl = null;
+  function lineNode(e) {
+    const d = document.createElement(e.k === 'hint' ? 'span' : 'div');
+    if (e.k === 'cmd') { const p = document.createElement('span'); p.className = 'pr'; p.textContent = e.p; const c = document.createElement('span'); c.className = 'cmd'; c.textContent = e.t; d.append(p, c); }
+    else { d.className = e.k; d.textContent = e.k === 'hint' ? 'Hint: ' + e.t : e.t; }
+    return d;
+  }
+  function rebuildTerminal() {
+    const s = cur(), b = body();
+    b.textContent = '';
+    if (!s.lines.length) s.lines.push({ k: 'sys', t: welcome(s) });
+    s.lines.forEach(e => b.appendChild(lineNode(e)));
+    const row = document.createElement('div'); row.className = 'inline';
+    promptEl = document.createElement('span'); promptEl.className = 'pr';
+    inputEl = document.createElement('input');
+    inputEl.setAttribute('autocomplete', 'off'); inputEl.setAttribute('autocapitalize', 'off'); inputEl.setAttribute('spellcheck', 'false'); inputEl.setAttribute('aria-label', 'Terminal input');
+    inputEl.addEventListener('keydown', onKey);
+    row.append(promptEl, inputEl); b.appendChild(row);
+    updatePrompt();
+    b.scrollTop = b.scrollHeight;
+  }
+  function push(e) {
+    const s = cur(); s.lines.push(e);
+    if (s.lines.length > MAX_LINES) { s.lines.splice(0, s.lines.length - MAX_LINES); }
+    body().insertBefore(lineNode(e), body().lastChild);
+  }
+  function updatePrompt() {
+    const s = cur(), sh = s.lab.shell;
+    promptEl.textContent = sh.prompt();
+    inputEl.disabled = !!s.submitted || !!sh.editor;
+    $('term-title').textContent = `${sh.user}@${sh.host}`;
+  }
+  function welcome(s) {
+    const sh = s.lab.shell;
+    return `${s.lab.title} — ${mode === 'exam' ? 'exam mode, scenario #' + s.seed : 'practice mode'}\nConnected to ${sh.host} as ${sh.user}. Type commands as you would on a real cluster.`;
+  }
+  function run(cmd) {
+    const s = cur(), sh = s.lab.shell;
+    const p = sh.prompt();
+    push({ k: 'cmd', p: p, t: cmd });
+    if (cmd.trim() && !sh.interactive && !sh.heredoc) { s.hist.push(cmd); }
+    s.hi = s.hist.length; s.draft = '';
+    let r;
+    try { r = sh.input(cmd); } catch (err) { r = { out: 'simulator error: ' + err.message, hints: [] }; console.error(err); }
+    s.cmds++;
+    if (sh.cleared) { s.lines = []; rebuildTerminal(); }
+    if (r.out) push({ k: 'out', t: r.out });
+    (r.hints || []).forEach(h => push({ k: 'hint', t: h }));
+    if (sh.editor) openEditor();
+    if (sh.heredoc && sh.heredoc.delim === null && sh.heredoc.body.length === 0) push({ k: 'sys', t: '(cat is reading what you type or paste. Press Ctrl+D on an empty line to finish.)' });
+    updatePrompt(); updateTasks();
+    body().scrollTop = body().scrollHeight;
+  }
+  function onKey(e) {
+    const s = cur(), sh = s.lab.shell;
+    if (e.key === 'Enter') { e.preventDefault(); const v = inputEl.value; inputEl.value = ''; run(v); return; }
+    if (e.key === 'ArrowUp') { if (!s.hist.length) return; e.preventDefault(); if (s.hi === s.hist.length) s.draft = inputEl.value; s.hi = Math.max(0, s.hi - 1); inputEl.value = s.hist[s.hi]; return; }
+    if (e.key === 'ArrowDown') { if (!s.hist.length) return; e.preventDefault(); s.hi = Math.min(s.hist.length, s.hi + 1); inputEl.value = s.hi === s.hist.length ? s.draft : s.hist[s.hi]; return; }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const c = NL.complete(sh, inputEl.value);
+      if (c.options && c.options.length > 1) { push({ k: 'cmd', p: sh.prompt(), t: inputEl.value }); push({ k: 'sys', t: c.options.join('  ') }); }
+      inputEl.value = c.line; return;
+    }
+    if (e.ctrlKey && (e.key === 'l' || e.key === 'L')) { e.preventDefault(); s.lines = []; rebuildTerminal(); inputEl.focus(); return; }
+    if (e.ctrlKey && (e.key === 'c' || e.key === 'C') && !window.getSelection().toString()) {
+      e.preventDefault();
+      push({ k: 'cmd', p: sh.prompt(), t: inputEl.value + '^C' }); inputEl.value = '';
+      if (sh.heredoc) sh.heredoc = null;
+      else if (sh.interactive && !/% $/.test(sh.prompt())) { sh.interactive = null; push({ k: 'out', t: 'Setup aborted.' }); }
+      updatePrompt(); return;
+    }
+    if (e.ctrlKey && (e.key === 'd' || e.key === 'D') && !inputEl.value) {
+      e.preventDefault();
+      if (sh.heredoc) {
+        const r = sh.endInput();
+        if (r.out) push({ k: 'out', t: r.out });
+        (r.hints || []).forEach(h => push({ k: 'hint', t: h }));
+        updatePrompt(); updateTasks(); body().scrollTop = body().scrollHeight; return;
+      }
+      run(sh.interactive && /% $/.test(sh.prompt()) ? 'quit' : 'exit');
+    }
+  }
+
+  /* ---------- editor (nano / vi) ---------- */
+  let edDirty = false, edConfirm = false, viMode = null, viCmd = null, viPending = '';
+  function openEditor() {
+    const sh = cur().lab.shell, e = sh.editor;
+    body().hidden = true; $('editor').hidden = false;
+    const nano = e.prog === 'nano';
+    $('ed-prog').textContent = nano ? 'GNU nano 6.2' : 'VIM 8.2 (simulated)';
+    $('ed-file').textContent = e.display;
+    $('ed-mod').textContent = '';
+    $('ed-text').value = e.content;
+    $('ed-status').textContent = e.isNew ? '[ New File ]' : `[ Read ${e.content ? e.content.replace(/\n$/, '').split('\n').length : 0} lines ]`;
+    $('ed-foot').innerHTML = '';
+    const items = nano ? [['^O', 'Write Out', save], ['^X', 'Exit', tryExit], ['^K', 'Cut line', null], ['Tab', 'inserts 2 spaces', null]] : [['i', 'insert', null], ['Esc', 'normal mode', null], [':w', 'save', null], [':wq', 'save and quit', null], [':q!', 'quit without saving', null], ['dd', 'delete line', null]];
+    items.forEach(([k, label, fn]) => { const b = document.createElement(fn ? 'button' : 'span'); const kb = document.createElement('b'); kb.textContent = k; b.append(kb, document.createTextNode(label)); if (fn) b.addEventListener('click', fn); $('ed-foot').appendChild(b); });
+    edDirty = false; edConfirm = false; viCmd = null; viPending = '';
+    viMode = nano ? null : 'normal';
+    $('ed-text').readOnly = viMode === 'normal';
+    if (!nano) $('ed-status').textContent = e.isNew ? `"${e.display}" [New]` : `"${e.display}" ${e.content ? e.content.replace(/\n$/, '').split('\n').length : 0}L, ${e.content.length}B`;
+    $('ed-text').focus();
+    $('ed-text').setSelectionRange(0, 0);
+  }
+  function viSet(m) { viMode = m; viCmd = null; $('ed-text').readOnly = m !== 'insert'; $('ed-status').textContent = m === 'insert' ? '-- INSERT --' : ''; }
+  function viRun(cmd) {
+    const c = cmd.trim();
+    if (c === 'w') { save(); viSet('normal'); if (!edDirty) $('ed-status').textContent = $('ed-status').textContent || 'written'; return; }
+    if (c === 'wq' || c === 'x' || c === 'wq!' || c === 'x!') { if (save()) closeEditor(); else viMode = 'normal'; return; }
+    if (c === 'q') { if (edDirty) { viSet('normal'); $('ed-status').textContent = 'E37: No write since last change (add ! to override)'; } else closeEditor(); return; }
+    if (c === 'q!') { closeEditor(); return; }
+    viSet('normal');
+    $('ed-status').textContent = c ? `E492: Not an editor command: ${c}` : '';
+  }
+  function viNormalKey(e) {
+    const t = $('ed-text'), v = t.value, a = t.selectionStart;
+    const lineStart = v.lastIndexOf('\n', a - 1) + 1; let lineEnd = v.indexOf('\n', a); if (lineEnd < 0) lineEnd = v.length;
+    const k = e.key;
+    if (e.ctrlKey || e.metaKey || e.altKey || /^(Arrow|Page|Home|End)/.test(k) || k === 'Shift') return; // let navigation and paste shortcuts through
+    e.preventDefault();
+    const seq = viPending + k; viPending = '';
+    const ins = pos => { viSet('insert'); t.selectionStart = t.selectionEnd = pos; };
+    if (k === 'i') return ins(a);
+    if (k === 'a') return ins(Math.min(a + 1, lineEnd));
+    if (k === 'I') return ins(lineStart);
+    if (k === 'A') return ins(lineEnd);
+    if (k === 'o') { t.value = v.slice(0, lineEnd) + '\n' + v.slice(lineEnd); markDirty(); return ins(lineEnd + 1); }
+    if (k === 'O') { t.value = v.slice(0, lineStart) + '\n' + v.slice(lineStart); markDirty(); return ins(lineStart); }
+    if (k === ':') { viMode = 'cmd'; viCmd = ''; $('ed-status').textContent = ':'; return; }
+    if (k === 'x') { if (a < lineEnd) { t.value = v.slice(0, a) + v.slice(a + 1); t.selectionStart = t.selectionEnd = a; markDirty(); } return; }
+    if (seq === 'dd') { const end = lineEnd < v.length ? lineEnd + 1 : lineEnd; t.value = v.slice(0, lineStart) + v.slice(end); t.selectionStart = t.selectionEnd = Math.min(lineStart, t.value.length); markDirty(); return; }
+    if (seq === 'ZZ') { viRun('x'); return; }
+    if (seq === 'gg') { t.selectionStart = t.selectionEnd = 0; return; }
+    if (k === 'G') { t.selectionStart = t.selectionEnd = v.length; return; }
+    if (k === 'd' || k === 'Z' || k === 'g') { viPending = k; return; }
+    if (k === 'Escape') { $('ed-status').textContent = ''; return; }
+  }
+  function markDirty() { edDirty = true; $('ed-mod').textContent = 'Modified'; }
+  function save() {
+    const s = cur(), sh = s.lab.shell; if (!sh.editor) return false;
+    const r = sh.saveEditor($('ed-text').value);
+    $('ed-status').textContent = r.msg;
+    push({ k: 'sys', t: `${sh.editor.prog}: ${r.msg}` });
+    (r.hints || []).forEach(h => push({ k: 'hint', t: h }));
+    if (r.ok) { edDirty = false; $('ed-mod').textContent = ''; $('ed-text').value = sh.editor.content; }
+    updateTasks();
+    return r.ok;
+  }
+  function closeEditor() {
+    const sh = cur().lab.shell; sh.closeEditor();
+    $('editor').hidden = true; body().hidden = false; edConfirm = false;
+    updatePrompt(); body().scrollTop = body().scrollHeight; inputEl.focus();
+  }
+  function tryExit() {
+    if (!edDirty) { closeEditor(); return; }
+    edConfirm = true;
+    $('ed-status').textContent = 'Save modified buffer?   Y Yes   N No   ^C Cancel';
+  }
+  $('ed-text').addEventListener('input', () => { edDirty = true; $('ed-mod').textContent = 'Modified'; });
+  $('ed-text').addEventListener('paste', e => { if (viMode === 'normal' || viMode === 'cmd') { e.preventDefault(); $('ed-status').textContent = 'Not in insert mode: press i first, then paste.'; } });
+  $('ed-text').addEventListener('keydown', e => {
+    const k = e.key.toLowerCase();
+    if (viMode === 'cmd') {
+      e.preventDefault();
+      if (e.key === 'Enter') { viRun(viCmd); return; }
+      if (e.key === 'Escape') { viSet('normal'); return; }
+      if (e.key === 'Backspace') { if (!viCmd) { viSet('normal'); return; } viCmd = viCmd.slice(0, -1); }
+      else if (e.key.length === 1) viCmd += e.key;
+      $('ed-status').textContent = ':' + viCmd; return;
+    }
+    if (viMode === 'normal' && !(e.ctrlKey && /^[osx]$/.test(k))) { viNormalKey(e); return; }
+    if (viMode === 'insert' && e.key === 'Escape') { e.preventDefault(); viSet('normal'); return; }
+    if (edConfirm) {
+      e.preventDefault();
+      if (k === 'y') { if (save()) closeEditor(); else edConfirm = false; }
+      else if (k === 'n') closeEditor();
+      else if ((e.ctrlKey && k === 'c') || k === 'escape') { edConfirm = false; $('ed-status').textContent = '[ Cancelled ]'; }
+      return;
+    }
+    if (e.ctrlKey && (k === 'o' || k === 's')) { e.preventDefault(); save(); return; }
+    if (e.ctrlKey && k === 'x') { e.preventDefault(); tryExit(); return; }
+    if (e.key === 'Tab') { e.preventDefault(); const t = e.target, a = t.selectionStart, b = t.selectionEnd; t.value = t.value.slice(0, a) + '  ' + t.value.slice(b); t.selectionStart = t.selectionEnd = a + 2; edDirty = true; $('ed-mod').textContent = 'Modified'; return; }
+    if (e.ctrlKey && k === 'k') { e.preventDefault(); const t = e.target, v = t.value, a = t.selectionStart; const st = v.lastIndexOf('\n', a - 1) + 1; let en = v.indexOf('\n', a); en = en < 0 ? v.length : en + 1; t.value = v.slice(0, st) + v.slice(en); t.selectionStart = t.selectionEnd = st; edDirty = true; $('ed-mod').textContent = 'Modified'; }
+  });
+
+  /* ---------- tasks, grading, report ---------- */
+  function updateTasks() {
+    const s = cur(), lab = s.lab;
+    const tasks = lab.tasks();
+    let g = null;
+    if (mode === 'practice' || s.submitted) { try { g = s.submitted ? s.submitted.grade : lab.grade(); } catch (err) { console.error(err); } }
+    const pass = g ? Object.fromEntries(g.results.map(x => [x.id, x.pass])) : {};
+    const ol = $('tasks'); ol.textContent = '';
+    tasks.forEach(t => { const li = document.createElement('li'); li.textContent = t.text; if (pass[t.id] && mode === 'practice') li.className = 'done'; ol.appendChild(li); });
+    $('progress').textContent = mode === 'practice' && g ? `${g.results.filter(x => x.pass).length}/${g.results.length} checks passing` : s.submitted ? '' : 'Graded on submit';
+  }
+  function report(g, final) {
+    const s = cur(), el = $('report');
+    el.hidden = false; el.textContent = '';
+    const n = g.results.filter(x => x.pass).length, t = g.results.length;
+    const h = document.createElement('h3'); h.textContent = final ? 'Lab result' : 'Progress check';
+    const sc = document.createElement('div'); sc.className = 'score ' + (n === t ? 'pass' : 'fail'); sc.textContent = `${n} / ${t} checks passed`;
+    el.append(h, sc);
+    if (final) { const m = document.createElement('p'); m.className = 'small'; const used = Math.round((s.submitted.at - s.started) / 1000); m.textContent = `Time used ${Math.floor(used / 60)}:${String(used % 60).padStart(2, '0')} · ${s.cmds} commands · scenario #${s.seed}${s.submitted.timeout ? ' · time limit reached' : ''}`; el.appendChild(m); }
+    const names = Object.fromEntries(s.lab.tasks().map((x, i) => [x.id, `Task ${i + 1}`]));
+    g.results.forEach(x => { const d = document.createElement('div'); d.className = 'res ' + (x.pass ? 'ok' : 'no'); const b = document.createElement('b'); b.textContent = `${x.pass ? '✓' : '✗'} ${names[x.id] || x.id}`; const p = document.createElement('span'); p.textContent = x.detail; d.append(b, p); el.appendChild(d); });
+    g.notes.forEach(nt => { const p = document.createElement('p'); p.className = 'note'; p.textContent = '⚠ ' + nt; el.appendChild(p); });
+    if (final) {
+      const row = document.createElement('div'); row.className = 'row';
+      const again = document.createElement('button'); again.className = 'btn'; again.textContent = 'Retry this scenario'; again.addEventListener('click', () => resetLab(false));
+      const fresh = document.createElement('button'); fresh.className = 'btn primary'; fresh.textContent = 'New scenario'; fresh.addEventListener('click', () => resetLab(true));
+      row.append(again, fresh); el.appendChild(row);
+    }
+    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+  function submit(timeout) {
+    const s = cur(); if (s.submitted) return;
+    const sh = s.lab.shell;
+    if (sh.editor) closeEditor();
+    s.submitted = { at: Date.now(), grade: s.lab.grade(), timeout: !!timeout };
+    push({ k: 'sys', t: timeout ? '*** Time is up. The lab was submitted automatically. ***' : '*** Lab submitted. ***' });
+    renderPanel(); updatePrompt();
+    report(s.submitted.grade, true);
+  }
+  function resetLab(newScenario) {
+    const s = cur();
+    sessions[mode][active] = makeSession(mode, active, newScenario && mode === 'exam' ? newSeed() : s.seed);
+    renderAll();
+  }
+
+  /* ---------- timer ---------- */
+  function tick() {
+    const s = cur();
+    const w = $('timer-wrap'), t = $('timer');
+    if (mode !== 'exam') { w.hidden = true; return; }
+    w.hidden = false;
+    const end = s.submitted ? s.submitted.at : Date.now();
+    const el = Math.floor((end - s.started) / 1000);
+    if (s.limit) {
+      const left = Math.max(0, s.limit * 60 - el);
+      t.textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} left`;
+      t.classList.toggle('low', left < 120);
+      if (left === 0 && !s.submitted) submit(true);
+    } else { t.textContent = `${Math.floor(el / 60)}:${String(el % 60).padStart(2, '0')}`; t.classList.remove('low'); }
+  }
+
+  /* ---------- panel ---------- */
+  function renderPanel() {
+    const s = cur(), lab = s.lab;
+    $('lab-title').textContent = lab.title;
+    $('intro').textContent = lab.intro;
+    $('mode-pill').textContent = mode === 'exam' ? 'Exam' : 'Practice';
+    $('mode-pill').className = 'pill ' + mode;
+    $('scenario').textContent = mode === 'exam' ? `Scenario #${s.seed}` : '';
+    $('exam-controls').hidden = mode !== 'exam' || !!s.submitted;
+    if (mode === 'exam') $('time-limit').value = String(s.limit || 0);
+    $('submit').hidden = mode !== 'exam'; $('submit').disabled = !!s.submitted;
+    $('check').hidden = mode !== 'practice';
+    $('new').hidden = mode !== 'exam';
+    $('sol-wrap').hidden = mode === 'exam' && !s.submitted;
+    $('solution').textContent = lab.solution().join('\n');
+    $('mode-help').textContent = mode === 'exam'
+      ? 'Exam mode: names, nodes and failure causes change with every scenario. There are no hints, the checklist stays hidden, and nothing is graded until you submit. The grader checks the final state of the simulated system, so verify your own work first.'
+      : 'Practice mode: a fixed scenario with hints under your commands. Tasks tick off as the simulated system reaches the required state. Use Check my work for an explanation of each check.';
+    document.querySelectorAll('[data-lab]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.lab === active)));
+    $('mode-practice').setAttribute('aria-pressed', String(mode === 'practice'));
+    $('mode-exam').setAttribute('aria-pressed', String(mode === 'exam'));
+    updateTasks(); tick();
+  }
+  function renderAll() {
+    const s = cur();
+    $('report').hidden = true;
+    renderPanel();
+    if (s.submitted) report(s.submitted.grade, true);
+    $('editor').hidden = true; body().hidden = false;
+    rebuildTerminal();
+    if (s.lab.shell.editor) openEditor();
+  }
+
+  /* ---------- wiring ---------- */
+  document.querySelectorAll('[data-lab]').forEach(b => b.addEventListener('click', () => { active = b.dataset.lab; renderAll(); inputEl.focus(); }));
+  $('mode-practice').addEventListener('click', () => { mode = 'practice'; try { localStorage.setItem('navia-aio-lab-mode', mode); } catch (e) { /* ignore */ } renderAll(); });
+  $('mode-exam').addEventListener('click', () => { mode = 'exam'; try { localStorage.setItem('navia-aio-lab-mode', mode); } catch (e) { /* ignore */ } renderAll(); });
+  $('check').addEventListener('click', () => report(cur().lab.grade(), false));
+  $('submit').addEventListener('click', () => { const s = cur(); if (window.confirm(`Submit ${s.lab.title}? You cannot change anything afterwards.`)) submit(false); });
+  $('reset').addEventListener('click', () => { if (cur().cmds === 0 || window.confirm('Reset this lab? Your progress in it will be lost.')) resetLab(false); });
+  $('new').addEventListener('click', () => { if (cur().cmds === 0 || cur().submitted || window.confirm('Start a new scenario? Your progress in this one will be lost.')) resetLab(true); });
+  $('time-limit').addEventListener('change', () => { const s = cur(); examLimit = s.limit = +$('time-limit').value; if (s.cmds === 0) s.started = Date.now(); tick(); });
+  $('term-body').addEventListener('click', () => { if (!window.getSelection().toString() && inputEl && !inputEl.disabled) inputEl.focus(); });
+  timerId = setInterval(tick, 1000);
+  renderAll();
 })();

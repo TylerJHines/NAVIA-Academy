@@ -1,12 +1,146 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NAVIA · Candidate-reported Lab Practice</title><link rel="stylesheet" href="style.css"><style>body{padding:24px;max-width:1200px;margin:auto}button{cursor:pointer} .recall-tabs{display:flex;flex-wrap:wrap;gap:12px;margin:18px 0}.recall-tabs button,.recall-controls button{background:#223a5d;color:white;border:1px solid #557298;border-radius:8px;padding:12px}.recall-grid{display:grid;grid-template-columns:1fr 1.4fr;gap:18px}.recall-panel{padding:20px;border:1px solid #40536e;border-radius:12px;background:#16273d}#recall-output{height:330px;overflow:auto;background:#091523;color:#bce6c7;padding:15px;white-space:pre-wrap;border-radius:8px}#recall-command,#recall-path,#recall-yaml{width:100%;box-sizing:border-box;padding:12px;margin:8px 0;background:#0b1c30;color:#fff;border:1px solid #58718e;border-radius:7px}#recall-yaml{height:220px;font-family:monospace}.recall-controls{display:flex;gap:10px}li{line-height:1.5}@media(max-width:760px){.recall-grid{grid-template-columns:1fr}}</style></head><body><p><a href="index.html">← Back to NAVIA AIO</a></p><h1>NCP-AIO · Three Lab Scenario Practice</h1><p>Based on an unverified candidate report, not official exam tasks. All operations are simulated. Commands and paths are training examples, not actual exam values.</p><div class="recall-tabs"><button data-recall="slurm">Lab 1 · Slurm</button><button data-recall="k8s">Lab 2 · Kubernetes</button><button data-recall="bcm">Lab 3 · BCM</button></div><div class="recall-grid"><section class="recall-panel"><h2 id="recall-title"></h2><p id="recall-brief"></p><strong id="recall-progress"></strong><ol id="recall-steps"></ol><button id="recall-reset">Reset current lab</button><p><small>Type <code>help</code> to see supported commands. Objectives are validated against simulated state, not merely typed command text.</small></p></section><section class="recall-panel"><h2>Interactive terminal</h2><pre id="recall-output" aria-live="polite"></pre><input id="recall-command" autocomplete="off" spellcheck="false" placeholder="Enter command (try help)"><div class="recall-controls"><button id="recall-submit">Run command</button></div><section id="recall-editor" hidden><h3>Manifest file editor</h3><p>Save the YAML to the exact scenario path before applying it.</p><input id="recall-path" value="/home/student/jobs/training.yaml" aria-label="Manifest path"><textarea id="recall-yaml" spellcheck="false" aria-label="YAML manifest">apiVersion: batch/v1
-kind: Job
-metadata:
-  name: training
-spec:
-  template:
-    spec:
-      restartPolicy: Never
-      containers:
-        - name: training
-          image: busybox:1.36
-          command: ["sh", "-c", "echo Training job complete"]</textarea><button id="recall-save">Save manifest</button></section></section></div><script src="exam-recall.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NAVIA · NCP-AIO Lab Simulator</title>
+<link rel="stylesheet" href="style.css?v=31">
+<style>
+  [hidden]{display:none!important}
+  body{padding:20px;max-width:1500px;margin:auto}
+  .lab-top{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin:10px 0 16px}
+  .seg{display:inline-flex;border:1px solid #3b5272;border-radius:10px;overflow:hidden}
+  .seg button{background:#16273d;color:#c8d7e9;border:0;padding:10px 16px;font:inherit;cursor:pointer}
+  .seg button+button{border-left:1px solid #3b5272}
+  .seg button[aria-pressed="true"]{background:#176e66;color:#fff}
+  .lab-tabs{display:flex;flex-wrap:wrap;gap:8px}
+  .lab-tabs button{background:#19283e;color:#c8d7e9;border:1px solid #334660;border-radius:9px;padding:10px 14px;cursor:pointer;font:inherit}
+  .lab-tabs button[aria-selected="true"]{background:#223a5d;border-color:#6d8fbd;color:#fff}
+  .lab-grid{display:grid;grid-template-columns:minmax(300px,.85fr) minmax(0,1.5fr);gap:16px;align-items:start}
+  .panel{padding:18px;border:1px solid #2c4059;border-radius:12px;background:#142238}
+  .panel h2{margin:0 0 6px}
+  .meta{display:flex;flex-wrap:wrap;gap:10px;align-items:center;color:#91a9c0;font-size:13px;margin-bottom:10px}
+  .pill{display:inline-block;border:1px solid #3b5272;border-radius:999px;padding:2px 10px;font-size:12px;color:#a9c3de}
+  .pill.exam{border-color:#c98a2b;color:#f2c27a}
+  .pill.practice{border-color:#2cae98;color:#8ee7cd}
+  .timer{font-variant-numeric:tabular-nums;font-weight:700;font-size:18px;color:#eaf1ff}
+  .timer.low{color:#ff9b8a}
+  ol.tasks{padding-left:22px;margin:10px 0}
+  ol.tasks li{margin:8px 0;line-height:1.45}
+  ol.tasks li.done{color:#7fe0b4}
+  ol.tasks li.done::marker{content:"✓  "}
+  .row{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .btn{background:#223a5d;color:#fff;border:1px solid #557298;border-radius:8px;padding:10px 14px;cursor:pointer;font:inherit}
+  .btn.primary{background:#176e66;border-color:#2cae98}
+  .btn.warn{background:#5a3a14;border-color:#c98a2b}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  details.sol{margin-top:14px}
+  details.sol pre{background:#0b1726;border:1px solid #2c4059;border-radius:8px;padding:10px;overflow:auto;font-size:13px;color:#cfe3ff;white-space:pre-wrap}
+  .small{font-size:13px;color:#91a9c0}
+  /* terminal */
+  .term{background:#07111d;border:1px solid #2c4059;border-radius:10px;height:min(68vh,640px);display:flex;flex-direction:column;overflow:hidden}
+  .term-bar{display:flex;justify-content:space-between;align-items:center;padding:6px 12px;background:#0f1d2f;border-bottom:1px solid #2c4059;font-size:12px;color:#8ea5bd}
+  .term-body{flex:1;overflow:auto;padding:12px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;font-size:13.5px;line-height:1.42;color:#d7e3f2;white-space:pre-wrap;word-break:break-word;cursor:text}
+  .term-body .cmd{color:#eaf1ff}
+  .term-body .pr{color:#7fd6ff}
+  .term-body .hint{display:block;margin:4px 0 6px;padding:6px 10px;border-left:3px solid #2cae98;background:#0f2a2a;color:#a9efd9;font-family:Inter,system-ui,sans-serif;font-size:13px;white-space:normal}
+  .term-body .sys{color:#91a9c0}
+  .inline{display:flex;align-items:flex-start}
+  .inline .pr{white-space:pre}
+  .inline input{flex:1;min-width:40px;background:transparent;border:0;outline:0;color:#eaf1ff;font:inherit;padding:0;margin:0}
+  .complete{color:#9fb7d1}
+  /* editor */
+  .editor{flex:1;display:flex;flex-direction:column;background:#07111d}
+  .editor .ed-head{background:#d7e3f2;color:#07111d;padding:3px 10px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;display:flex;justify-content:space-between}
+  .editor textarea{flex:1;resize:none;background:#07111d;color:#eaf1ff;border:0;outline:0;padding:10px 12px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13.5px;line-height:1.42;tab-size:2}
+  .editor .ed-status{min-height:20px;text-align:center;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;color:#07111d;background:#a9c3de}
+  .editor .ed-status:empty{background:transparent}
+  .editor .ed-foot{display:flex;flex-wrap:wrap;gap:6px 18px;padding:6px 10px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:#c8d7e9;border-top:1px solid #2c4059}
+  .editor .ed-foot b{background:#d7e3f2;color:#07111d;padding:0 3px;border-radius:2px;margin-right:4px}
+  .editor .ed-foot button{background:none;border:0;color:inherit;font:inherit;cursor:pointer;padding:0}
+  /* report */
+  .report{margin-top:16px}
+  .report h3{margin:0 0 6px}
+  .score{font-size:28px;font-weight:800}
+  .score.pass{color:#7fe0b4}.score.fail{color:#ff9b8a}
+  .res{border:1px solid #2c4059;border-radius:10px;padding:10px 12px;margin:8px 0;background:#101d30}
+  .res.ok{border-color:#2a7a5f}.res.no{border-color:#8a3a33}
+  .res b{display:block;margin-bottom:3px}
+  .note{color:#f2c27a}
+  @media(max-width:960px){.lab-grid{grid-template-columns:1fr}.term{height:62vh}.term-body{white-space:pre;font-size:12px}.term-body .hint{white-space:normal}.term-bar span+span{display:none}.inline input{font-size:16px}}
+</style>
+</head>
+<body>
+<p><a href="index.html">← Back to NAVIA AIO</a></p>
+<h1>NCP-AIO · Three-Lab Simulator</h1>
+<p class="small">Built from one candidate's description of the exam's lab section. These are not the official exam tasks. Everything runs as a simulation in your browser: the commands, output and grading imitate real Slurm, Kubernetes and BCM behaviour but touch no real system.</p>
+
+<div class="lab-top">
+  <div class="seg" role="group" aria-label="Mode">
+    <button id="mode-practice" aria-pressed="true">Practice mode</button>
+    <button id="mode-exam" aria-pressed="false">Exam mode</button>
+  </div>
+  <div class="lab-tabs" role="tablist" aria-label="Labs">
+    <button role="tab" data-lab="slurm" aria-selected="true">Lab 1 · Slurm</button>
+    <button role="tab" data-lab="k8s" aria-selected="false">Lab 2 · Kubernetes</button>
+    <button role="tab" data-lab="bcm" aria-selected="false">Lab 3 · BCM</button>
+  </div>
+</div>
+
+<div class="lab-grid">
+  <section class="panel" aria-labelledby="lab-title">
+    <h2 id="lab-title"></h2>
+    <div class="meta">
+      <span id="mode-pill" class="pill practice">Practice</span>
+      <span id="scenario"></span>
+      <span id="timer-wrap" hidden>⏱ <span id="timer" class="timer">--:--</span></span>
+      <span id="progress"></span>
+    </div>
+    <p id="intro" class="small"></p>
+    <ol id="tasks" class="tasks"></ol>
+    <div id="exam-controls" class="row" hidden>
+      <label class="small">Time limit
+        <select id="time-limit">
+          <option value="0">No limit</option>
+          <option value="15">15 min</option>
+          <option value="20" selected>20 min</option>
+          <option value="30">30 min</option>
+          <option value="45">45 min</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <button id="check" class="btn">Check my work</button>
+      <button id="submit" class="btn primary" hidden>Submit lab</button>
+      <button id="reset" class="btn">Reset lab</button>
+      <button id="new" class="btn" hidden>New scenario</button>
+    </div>
+    <details class="sol" id="sol-wrap">
+      <summary>Reference solution</summary>
+      <pre id="solution"></pre>
+    </details>
+    <div id="report" class="report" hidden></div>
+    <p class="small" id="mode-help"></p>
+  </section>
+
+  <section class="panel" aria-label="Terminal">
+    <div class="term">
+      <div class="term-bar"><span id="term-title">student@headnode</span><span>Tab completes · ↑↓ history · Ctrl+L clears · Ctrl+C cancels</span></div>
+      <div id="term-body" class="term-body" aria-live="polite"></div>
+      <div id="editor" class="editor" hidden>
+        <div class="ed-head"><span id="ed-prog">GNU nano 6.2</span><span id="ed-file"></span><span id="ed-mod"></span></div>
+        <textarea id="ed-text" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="File editor"></textarea>
+        <div id="ed-status" class="ed-status"></div>
+        <div class="ed-foot" id="ed-foot"></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script src="lab-core.js?v=5"></script>
+<script src="lab-slurm.js?v=5"></script>
+<script src="lab-k8s.js?v=5"></script>
+<script src="lab-bcm.js?v=5"></script>
+<script src="exam-recall.js?v=5"></script>
+</body>
+</html>
