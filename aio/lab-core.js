@@ -400,7 +400,7 @@
     const outs = [], errs = [];
     const fmt = (p, n) => {
       if (!long) return n;
-      const e = this.fs.get(p) || {};
+      const e = n === '.' || n === '..' ? { dir: true, mtime: (this.fs.get(p) || {}).mtime } : (this.fs.get(p) || {});
       const size = e.dir ? 4096 : (this.read(p) || '').length;
       const t = new Date(e.mtime || this.now());
       const m = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][t.getMonth()];
@@ -413,7 +413,7 @@
       if (!this.isDir(p)) { outs.push(fmt(p, t)); return; }
       let names = this.listDir(p).filter(n => all || !n.startsWith('.'));
       if (all) names = ['.', '..'].concat(names);
-      const body = long ? (names.length ? 'total ' + names.length * 4 + '\n' : 'total 0') + names.map(n => fmt(p === '/' ? '/' + n : p + '/' + n, n)).join('\n') : names.join('  ');
+      const body = long ? (names.length ? 'total ' + names.length * 4 + '\n' : 'total 0') + names.map(n => fmt(n === '.' ? p : n === '..' ? NL.dirname(p) : (p === '/' ? '/' + n : p + '/' + n), n)).join('\n') : names.join('  ');
       outs.push((targets.length > 1 ? t + ':\n' : '') + body);
     });
     return { out: outs.join('\n\n'), err: errs.join('\n'), code: errs.length ? 2 : 0 };
@@ -530,7 +530,7 @@
     const page = this.lab && this.lab.man ? this.lab.man(a[1], this) : null;
     return page ? NL.ok(page) : NL.fail(`No manual entry for ${a[1] || ''}`.trim(), 16);
   };
-  B.ssh = function (a) {
+  B.ssh = function (a, ctx) {
     let ti = 1;
     while (ti < a.length && a[ti].startsWith('-')) ti += /^-[bcDEeFIiJLlmOopQRSWw]$/.test(a[ti]) ? 2 : 1; // skip ssh options (and their values)
     const target = (a[ti] || '').replace(/^.*@/, '');
@@ -543,7 +543,15 @@
     if (this.user === 'root') { this.home = '/root'; this.cwd = '/root'; } else this.cwd = this.home;
     if (rest.length) {
       // like real ssh, the remote command is one string run by the remote shell: ssh node002 "systemctl status slurmd"
-      const out = this.runLine(rest.map(x => rest.length > 1 && /\s/.test(x) ? `"${x}"` : x).join(' '));
+      const remote = rest.map(x => rest.length > 1 && /\s/.test(x) ? `"${x}"` : x).join(' ');
+      let out;
+      if (ctx && ctx.stdin != null) {
+        // local pipe into the remote command: munge -n | ssh node002 unmunge
+        const env = Object.assign({ HOME: this.home, USER: this.user, HOSTNAME: this.host, PWD: this.cwd, '?': this.lastCode }, this.env);
+        const tk = NL.tokenize(remote, env); const ps = tk.error ? null : NL.parse(tk.toks);
+        if (ps && !ps.error && ps.list.length) { ps.list[0].pipeline[0].heredoc = '\u0004'; out = this.runParsed(ps.list, ctx.stdin); }
+        else out = this.runLine(remote);
+      } else out = this.runLine(remote);
       const code = this.lastCode;
       const f = this.stack.pop(); this.user = f.user; this.host = f.host; this.cwd = f.cwd; this.home = f.home;
       return { out: out, err: '', code: code };
@@ -585,6 +593,12 @@
     this.user = saved.user; this.home = saved.home; this.cwd = saved.cwd;
     return { out: out, err: '', code: code };
   };
+  B.bash = function (a) {
+    const ci = a.indexOf('-c');
+    if (ci < 0) return NL.ok(); // an interactive subshell is not simulated
+    return { out: this.runLine(a[ci + 1] || ''), err: '', code: this.lastCode };
+  };
+  B.sh = B.bash;
   Shell.prototype.builtins = B;
   NL.builtinNames = () => Object.keys(B);
   NL.Shell = Shell;

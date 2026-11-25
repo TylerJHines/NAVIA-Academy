@@ -55,10 +55,19 @@
     };
     function newSession() { return { mode: '', sel: null }; }
     let cs = null; // interactive cmsh session
-    const pfx = s => `[headnode${s.mode ? '->' + s.mode + (store[s.mode] && modified(s.mode) ? '*' : '') : ''}${s.sel ? `[${s.sel}${store[s.mode][s.sel] && store[s.mode][s.sel].stage ? '*' : ''}]` : ''}]% `;
+    const pfx = s => `[headnode${s.mode ? '->' + s.mode + (store[s.mode] && modified(s.mode) ? '*' : '') : ''}${s.sel ? `[${s.sel}${store[s.mode][s.sel] && store[s.mode][s.sel].stage ? '*' : ''}]` : ''}${s.sub ? '->' + s.sub + (s.subSel ? `[${s.subSel}]` : '') : ''}]% `;
     const notice = text => `${NL.dateCmd(sh.now())} [notice] headnode: ${text}`;
     const stage = o => { if (!o.stage) o.stage = JSON.parse(JSON.stringify(o.data)); return o.stage; };
 
+    const NETWORKS = ['internalnet', 'externalnet', 'ipminet', 'globalnet'];
+    const ROLES = ['boot', 'provisioning', 'monitoring', 'storage', 'login', 'nfsserver', 'slurmclient', 'slurmserver', 'slurmsubmit', 'slurmaccounting', 'pbsproclient', 'lsfclient', 'dockerhost', 'sgeclient', 'jupyterhub', 'firewall'];
+    const rolesOf = d => Array.isArray(d.roleList) ? d.roleList : [];
+    function ifacesOf(d) {
+      const base = d.type === 'HeadNode'
+        ? { eth0: { type: 'physical', ip: d.ip, network: 'internalnet' }, eth1: { type: 'physical', ip: '192.168.200.10', network: 'externalnet' } }
+        : { BOOTIF: { type: 'physical', ip: d.ip, network: d.network || 'internalnet', prov: true } };
+      return Object.assign(base, d.ifaces || {});
+    }
     function showTable(rows) {
       const w = Math.max(32, ...rows.map(x => x[0].length));
       return [padR('Parameter', w) + ' ' + 'Value', '-'.repeat(w) + ' ' + '-'.repeat(48)].concat(rows.map(x => padR(x[0], w) + ' ' + (x[1] === '' || x[1] == null ? '' : x[1]))).join('\n');
@@ -68,7 +77,7 @@
       if (!o) return fail(`Unable to find ${m} object: ${name}`);
       const d = view(o);
       if (m === 'softwareimage') return ok(showTable([['Name', d.name], ['Revision', ''], ['Path', d.path], ['Kernel version', d.kernelversion], ['Kernel parameters', d.kernelparameters || 'rdblacklist=nouveau'], ['Locked', d.locked], ['Creation time', NL.dateCmd(d.created || t0)], ['Nodes', String(nodesUsingImage(d.name))], ['Enable SOL', 'no'], ['Boot FSPart', '98784247810'], ['Notes', d.notes ? '<' + d.notes.length + 'B>' : '<0B>']]));
-      if (m === 'category') return ok(showTable([['Name', d.name], ['Revision', ''], ['Software image', d.softwareimage], ['Nodes', String(nodesInCategory(d.name))], ['Default gateway', d.defaultgateway], ['Name servers', d.nameservers], ['Install mode', d.installmode], ['New node install mode', d.newnodeinstallmode], ['Roles', d.roles], ['Management network', 'internalnet'], ['Notes', d.notes ? '<' + d.notes.length + 'B>' : '<0B>']]));
+      if (m === 'category') return ok(showTable([['Name', d.name], ['Revision', ''], ['Software image', d.softwareimage], ['Nodes', String(nodesInCategory(d.name))], ['Default gateway', d.defaultgateway], ['Name servers', d.nameservers], ['Install mode', d.installmode], ['New node install mode', d.newnodeinstallmode], ['Roles', rolesOf(d).join(', ')], ['Management network', 'internalnet'], ['Notes', d.notes ? '<' + d.notes.length + 'B>' : '<0B>']]));
       if (m === 'device') return ok(showTable([['Hostname', d.hostname], ['Type', d.type], ['Category', d.category], ['Software image', d.softwareimage || (d.category ? `(${d.category}->${(committed('category', d.category) || { data: {} }).data.softwareimage || ''})` : '')], ['MAC', d.mac], ['IP', d.ip], ['Network', d.network], ['Provisioning interface', d.type === 'HeadNode' ? '' : 'BOOTIF'], ['Install mode', d.installmode || ''], ['Status', statusOf(o)], ['Rack', ''], ['Notes', d.notes ? '<' + d.notes.length + 'B>' : '<0B>']]));
       return ok('');
     }
@@ -82,25 +91,140 @@
       if (m === 'kubernetes') return ok(NL.table(['Name (key)', 'Version', 'Nodes'], k8s ? [[k8s.name, 'v' + k8s.version, String(k8sNodes().length)]] : [], { rule: true, sep: ' ' }));
       return ok('');
     }
+    function splitTop(line) {
+      const parts = []; let cur = '', depth = 0, q = null;
+      for (const ch of line) {
+        if (q) { cur += ch; if (ch === q) q = null; continue; }
+        if (ch === '"' || ch === "'") { q = ch; cur += ch; continue; }
+        if (ch === '(') depth++;
+        if (ch === ')') depth = Math.max(0, depth - 1);
+        if (ch === ';' && depth === 0) { parts.push(cur); cur = ''; continue; }
+        cur += ch;
+      }
+      parts.push(cur);
+      return parts;
+    }
     function cmshLine(s, line) {
-      const tk = NL.tokenize(line, {});
-      if (tk.error) return fail('Syntax error: ' + tk.error);
-      // split on ';'
-      const cmds = [[]];
-      tk.toks.forEach(t => { if (t.t === 'op' && t.v === ';') cmds.push([]); else if (t.t === 'w') cmds[cmds.length - 1].push(t.v); else cmds[cmds.length - 1].push(t.v); });
       const outs = [];
-      for (const a of cmds) { if (!a.length) continue; const r2 = cmshCmd(s, a); if (r2.quit) { outs.push(r2.out); return { out: outs.filter(Boolean).join('\n'), quit: true }; } const t = [r2.err, r2.out].filter(Boolean).join('\n'); if (t) outs.push(t); }
+      for (const seg of splitTop(line)) {
+        if (!seg.trim()) continue;
+        let r2;
+        const fm = /^\s*foreach\b([^(]*)\((.*)\)\s*$/s.exec(seg);
+        if (fm) r2 = foreach(s, fm[1], fm[2]);
+        else if (/^\s*foreach\b/.test(seg)) r2 = fail('Usage: foreach [-n <nodes>] [-c <categories>] [-t <type>] [<name> ...] ( <command>; <command> ... )');
+        else { const tk = NL.tokenize(seg, {}); r2 = tk.error ? fail('Syntax error: ' + tk.error) : cmshCmd(s, tk.toks.map(t => t.v)); }
+        if (r2.quit) { outs.push(r2.out); return { out: outs.filter(Boolean).join('\n'), quit: true }; }
+        const t = [r2.err, r2.out].filter(Boolean).join('\n'); if (t) outs.push(t);
+      }
       return { out: outs.join('\n') };
+    }
+    /* node001..node003 and comma lists, as cmsh accepts them */
+    function nodeRange(spec) {
+      const out = [];
+      String(spec || '').split(',').filter(Boolean).forEach(x => {
+        const m = /^(.*?)(\d+)\.\.(.*?)(\d+)$/.exec(x);
+        if (m && m[1] === m[3]) { const w = m[2].length; for (let i = +m[2]; i <= +m[4]; i++) out.push(m[1] + String(i).padStart(w, '0')); }
+        else out.push(x);
+      });
+      return out;
+    }
+    function foreach(s, optStr, body) {
+      const m = s.mode;
+      if (!store[m]) return fail('foreach: enter a mode with objects first (device, category, softwareimage)');
+      const tk = NL.tokenize(optStr, {}); const a = (tk.toks || []).map(t => t.v);
+      let names = [], cats = null, type = null;
+      for (let i = 0; i < a.length; i++) {
+        if (a[i] === '-n' || a[i] === '--nodes') names = names.concat(nodeRange(a[++i]));
+        else if (a[i] === '-c' || a[i] === '--category') cats = (a[++i] || '').split(',');
+        else if (a[i] === '-t' || a[i] === '--type') type = (a[++i] || '').toLowerCase();
+        else if (!a[i].startsWith('-')) names.push(a[i]);
+      }
+      let targets = Object.keys(store[m]);
+      if (names.length) { const bad = names.find(n => !store[m][n]); if (bad) return fail(`Unable to find ${m}: ${bad}`); targets = names; }
+      if (cats) targets = targets.filter(n => cats.includes(view(store[m][n]).category));
+      if (type) targets = targets.filter(n => (view(store[m][n]).type || '').toLowerCase() === type);
+      const outs = [];
+      targets.forEach(n => { const sub = { mode: m, sel: n }; const r2 = cmshLine(sub, body); if (r2.out) outs.push(r2.out); });
+      return ok(outs.join('\n'));
+    }
+    function subCmd(s, a) {
+      const c = a[0], coll = store[s.mode], o = coll[s.sel];
+      if (!o) { s.sub = null; s.subSel = null; return fail(`Unable to find ${s.mode}: ${s.sel}`); }
+      const d = view(o);
+      if (c === 'exit' || c === '..') { if (s.subSel) s.subSel = null; else s.sub = null; return ok(''); }
+      if (c === 'commit' || c === 'refresh') return cmshCmd({ mode: s.mode, sel: s.sel }, [c]);
+      if (s.sub === 'interfaces') {
+        const ifs = ifacesOf(d);
+        switch (c) {
+          case 'list': case 'ls': return ok(NL.table(['Type', 'Network device name', 'IP', 'Network', 'Start if'], Object.entries(ifs).map(([n, x]) => [x.type, n + (x.prov ? ' [prov]' : ''), x.ip || '0.0.0.0', x.network || '', 'ALWAYS']), { rule: true, sep: ' ' }));
+          case 'use': if (!ifs[a[1]]) return fail(`Unable to find interface: ${a[1] || ''}`); s.subSel = a[1]; return ok('');
+          case 'show': case 'get': {
+            const n = c === 'show' ? (a[1] || s.subSel) : (a.length > 2 ? a[1] : s.subSel); const x = ifs[n];
+            if (!x) return fail(n ? `Unable to find interface: ${n}` : `${c}: no interface selected. Use "use <interface>" first`);
+            const props = { type: x.type, networkdevicename: n, network: x.network || '', ip: x.ip || '0.0.0.0', mac: x.prov ? d.mac : '00:00:00:00:00:00', startif: 'ALWAYS' };
+            if (c === 'get') { const k = (a.length > 2 ? a[2] : a[1] || '').toLowerCase(); if (!(k in props)) return fail(`Invalid property: ${a[a.length > 2 ? 2 : 1] || ''}`); return ok(props[k]); }
+            return ok(showTable([['Type', props.type], ['Network device name', n], ['Network', props.network], ['IP', props.ip], ['MAC', props.mac], ['Start if', 'ALWAYS'], ['BMC', 'no']]));
+          }
+          case 'set': {
+            let n = s.subSel, k = a[1], v = a[2];
+            if (a.length > 3) { n = a[1]; k = a[2]; v = a[3]; }
+            if (!n || !ifs[n]) return fail('set: no interface selected. Use "use <interface>" first');
+            k = (k || '').toLowerCase();
+            if (k === 'ip') { if (!IP.test(v || '')) return fail(`Invalid IP address: ${v || ''}`); }
+            else if (k === 'network') { if (!NETWORKS.includes(v)) return fail(`Unable to find network: ${v || ''}`); }
+            else return fail(`Invalid property: ${a[a.length > 3 ? 2 : 1] || ''}`);
+            const st = stage(o);
+            if (ifs[n].prov) st[k] = v; else { st.ifaces = st.ifaces || {}; st.ifaces[n] = Object.assign({}, ifs[n], { [k]: v }); }
+            return ok('');
+          }
+          case 'add': {
+            const type = (a[1] || '').toLowerCase(), n = a[2];
+            if (!['physical', 'bmc', 'vlan', 'alias', 'bond', 'bridge'].includes(type) || !n) return fail('Usage: add <physical|bmc|vlan|alias|bond|bridge> <name> [ip] [network]');
+            if (ifs[n]) return fail(`Interface ${n} already exists`);
+            if (a[3] && !IP.test(a[3])) return fail(`Invalid IP address: ${a[3]}`);
+            if (a[4] && !NETWORKS.includes(a[4])) return fail(`Unable to find network: ${a[4]}`);
+            const st = stage(o); st.ifaces = st.ifaces || {}; st.ifaces[n] = { type: type, ip: a[3] || '', network: a[4] || '' };
+            s.subSel = n; return ok('');
+          }
+          case 'remove': {
+            const n = a[1] || s.subSel;
+            if (!ifs[n]) return fail(`Unable to find interface: ${n || ''}`);
+            if (ifs[n].prov || d.type === 'HeadNode') return fail(`Removing ${n} is blocked in this lab`);
+            const st = stage(o); delete st.ifaces[n]; if (s.subSel === n) s.subSel = null; return ok('');
+          }
+        }
+        return fail(`Unknown command: ${c}`);
+      }
+      // roles
+      const rl = rolesOf(d);
+      switch (c) {
+        case 'list': case 'ls': return ok(NL.table(['Name (key)'], rl.map(x => [x]), { rule: true, sep: ' ' }));
+        case 'assign': {
+          const role = (a[1] || '').toLowerCase();
+          if (!ROLES.includes(role)) return fail(`Unknown role: ${a[1] || ''}. Available roles: ${ROLES.join(', ')}`);
+          if (rl.includes(role)) return fail(`Role ${role} is already assigned`);
+          stage(o).roleList = rl.concat([role]); s.subSel = role; return ok('');
+        }
+        case 'unassign': case 'remove': {
+          const role = (a[1] || s.subSel || '').toLowerCase();
+          if (!rl.includes(role)) return fail(`Role ${role} is not assigned`);
+          stage(o).roleList = rl.filter(x => x !== role); if (s.subSel === role) s.subSel = null; return ok('');
+        }
+        case 'use': if (!rl.includes(a[1])) return fail(`Unable to find role: ${a[1] || ''}`); s.subSel = a[1]; return ok('');
+        case 'show': { const n = a[1] || s.subSel; if (!n || !rl.includes(n)) return fail(n ? `Unable to find role: ${n}` : 'show: no role selected'); return ok(showTable([['Name', n], ['Type', n.replace(/^\w/, ch => ch.toUpperCase()) + 'Role'], ['Provisioning associations', '<0 internally used>']])); }
+      }
+      return fail(`Unknown command: ${c}`);
     }
     function cmshCmd(s, a) {
       let c = a[0];
       const m = s.mode;
       if (MODES.includes(c)) {
-        s.mode = c === 'main' ? 'main' : c; s.sel = null;
+        s.mode = c === 'main' ? 'main' : c; s.sel = null; s.sub = null; s.subSel = null;
         if (a.length > 1) return cmshCmd(s, a.slice(1));
         return ok('');
       }
       if (c === 'ds') return cmshCmd({ mode: 'device', sel: null }, ['status'].concat(a.slice(1)));
+      if (s.sub && !['quit', 'home', 'top', '/', 'help', 'modified'].includes(c)) return subCmd(s, a);
       switch (c) {
         case 'quit': {
           const dirty = ['softwareimage', 'category', 'device'].some(modified);
@@ -111,8 +235,8 @@
           if (s.sel) { s.sel = null; return ok(''); }
           if (s.mode) { s.mode = ''; return ok(''); }
           return cmshCmd(s, ['quit']);
-        case 'home': case 'top': case '/': s.mode = ''; s.sel = null; return ok('');
-        case 'help': return ok(['================================== Top ===================================', 'alias ......................... Set aliases', 'category ...................... Enter category mode', 'commit ........................ Commit local changes', 'device ........................ Enter device mode', 'exit .......................... Exit from current object or mode', 'help .......................... Display this help', 'kubernetes .................... Enter kubernetes mode', 'list .......................... List objects in current mode', 'modified ...................... List modified objects', 'network ....................... Enter network mode', 'partition ..................... Enter partition mode', 'quit .......................... Quit shell', 'refresh ....................... Revert local changes', 'softwareimage ................. Enter softwareimage mode', '', '=============================== Object mode ===============================', 'add ........................... Create a new object', 'clone ......................... Clone an object', 'get ........................... Get a property', 'remove ........................ Remove an object', 'set ........................... Set a property', 'show .......................... Show object properties', 'use ........................... Use the specified object', 'power ......................... (device mode) power on|off|reset|status [-n node]', 'status ........................ (device mode) Show device status'].join('\n'));
+        case 'home': case 'top': case '/': s.mode = ''; s.sel = null; s.sub = null; s.subSel = null; return ok('');
+        case 'help': return ok(['================================== Top ===================================', 'alias ......................... Set aliases', 'category ...................... Enter category mode', 'commit ........................ Commit local changes', 'device ........................ Enter device mode', 'exit .......................... Exit from current object or mode', 'help .......................... Display this help', 'kubernetes .................... Enter kubernetes mode', 'list .......................... List objects in current mode', 'modified ...................... List modified objects', 'network ....................... Enter network mode', 'partition ..................... Enter partition mode', 'quit .......................... Quit shell', 'refresh ....................... Revert local changes', 'softwareimage ................. Enter softwareimage mode', '', '=============================== Object mode ===============================', 'add ........................... Create a new object', 'clone ......................... Clone an object', 'get ........................... Get a property', 'remove ........................ Remove an object', 'set ........................... Set a property', 'show .......................... Show object properties', 'use ........................... Use the specified object', 'power ......................... (device mode) power on|off|reset|status [-n node]', 'interfaces .................... (device object) Enter interfaces submode', 'roles ......................... (device/category object) Enter roles submode', 'imageupdate ................... (device mode) Sync a node with its image [-n node] [-w]', 'foreach ....................... Run commands on several objects: foreach -n node001..node003 (get ip)', 'status ........................ (device mode) Show device status'].join('\n'));
         case 'modified': {
           const rows = [];
           ['softwareimage', 'category', 'device'].forEach(mm => Object.values(store[mm]).filter(o => o.stage).forEach(o => rows.push([o.isNew ? '+' : '', mm[0].toUpperCase() + mm.slice(1), view(o).name || view(o).hostname])));
@@ -143,6 +267,34 @@
           if (!n) return fail('show: no object selected. Use "use <name>" or "show <name>"');
           if (!editable) return ok(showTable([['Name', n]]));
           return show(s, n);
+        }
+        case 'interfaces': case 'roles': {
+          if (c === 'interfaces' && m !== 'device') return fail('Unknown command: interfaces');
+          if (c === 'roles' && m !== 'device' && m !== 'category') return fail('Unknown command: roles');
+          if (!s.sel) return fail(`${c}: no object selected. Use "use <name>" first`);
+          s.sub = c; s.subSel = null;
+          if (a.length > 1) return subCmd(s, a.slice(1));
+          return ok('');
+        }
+        case 'imageupdate': {
+          if (m !== 'device') return fail('Unknown command: imageupdate');
+          const wait = a.includes('-w') || a.includes('--wait');
+          const ni = a.indexOf('-n'), cix = a.indexOf('-c');
+          let names = ni >= 0 ? nodeRange(a[ni + 1]) : cix >= 0 ? Object.keys(coll).filter(n => (a[cix + 1] || '').split(',').includes(view(coll[n]).category)) : s.sel ? [s.sel] : null;
+          if (!names || !names.length) return fail('imageupdate: no nodes given. Use -n <nodes>, -c <category>, or "use <node>" first');
+          const lines = [], errs = [];
+          if (!wait) lines.push('Performing dry run (use synclog command to review result, then pass -w to perform real update)...');
+          names.forEach(n => {
+            const o = coll[n];
+            if (!o || o.isNew) { errs.push(`Unable to find device: ${n}`); return; }
+            const d = view(o);
+            if (d.type === 'HeadNode') { errs.push(`imageupdate: ${n} is the head node`); return; }
+            if (statusOf(o) !== 'UP') { errs.push(`Device ${n} is not UP (status: ${statusOf(o)}), skipping`); return; }
+            const img = d.softwareimage || (committed('category', d.category) || { data: {} }).data.softwareimage;
+            const dr = wait ? 'dry run = no' : 'dry run = yes, no data changes!';
+            lines.push(notice(`Provisioning started: sending headnode:/cm/images/${img} to ${n}:/, mode UPDATE, ${dr}`), notice(`Provisioning completed: sent headnode:/cm/images/${img} to ${n}:/, mode UPDATE, ${dr}`));
+          });
+          return { out: lines.join('\n'), err: errs.join('\n'), code: errs.length ? 1 : 0 };
         }
         case 'power': {
           if (m !== 'device') return fail('Unknown command: power');
@@ -305,7 +457,7 @@
         complete(line) {
           const m = /(\S*)$/.exec(line), word = m[1], before = line.slice(0, line.length - word.length);
           const first = !before.trim() || /;\s*$/.test(before);
-          const cmds = MODES.concat(['list', 'use', 'show', 'set', 'get', 'clone', 'add', 'commit', 'remove', 'refresh', 'exit', 'quit', 'help', 'modified', 'status', 'power', 'ds']);
+          const cmds = MODES.concat(['list', 'use', 'show', 'set', 'get', 'clone', 'add', 'commit', 'remove', 'refresh', 'exit', 'quit', 'help', 'modified', 'status', 'power', 'ds', 'interfaces', 'roles', 'imageupdate', 'foreach', 'assign', 'unassign']);
           let cands = [];
           const prev = before.trim().split(/\s+/);
           if (first) cands = cmds;
@@ -375,10 +527,17 @@ modules:
       return ok(lines.join('\n'));
     }
     function startWizard() {
-      const c = { name: 'default', version: '1.30', podNet: '172.29.0.0/16', svcNet: '10.150.0.0/16', controlPlane: [], etcd: [], workers: [], nodes: [], gpuOperator: true };
+      const c = { name: 'default', version: '1.30', podNet: '172.29.0.0/16', svcNet: '10.150.0.0/16', controlPlane: [], etcd: [], workers: [], nodes: [], gpuOperator: false };
       const nodeNames = () => Object.values(store.device).filter(o => !o.isNew).map(o => o.data.hostname);
       const catNames = () => Object.values(store.category).filter(o => !o.isNew).map(o => o.data.name);
-      const box = (title, body) => { const w = Math.max(64, ...body.map(b => b.length + 4), title.length + 8); const line = s => '│ ' + padR(s, w - 4) + ' │'; return ['┌─ ' + title + ' ' + '─'.repeat(Math.max(0, w - title.length - 5)) + '┐'].concat(body.map(line), ['└' + '─'.repeat(w - 2) + '┘']).join('\n'); };
+      const W = 64;
+      const wrap = t => {
+        if (t.length <= W - 4) return [t];
+        const ind = /^\s*/.exec(t)[0]; const out = []; let cur = ind;
+        t.trim().split(' ').forEach(w => { const next = cur.trim() ? cur + ' ' + w : cur + w; if (next.length > W - 4 && cur.trim()) { out.push(cur); cur = ind + '  ' + w; } else cur = next; });
+        out.push(cur); return out;
+      };
+      const box = (title, body) => { const line = x => '│ ' + padR(x, W - 4) + ' │'; return ['┌─ ' + title + ' ' + '─'.repeat(Math.max(0, W - title.length - 5)) + '┐'].concat(body.flatMap(wrap).map(line), ['└' + '─'.repeat(W - 2) + '┘']).join('\n'); };
       const pickList = s => { const t = s.trim(); if (!t) return []; return t.split(/[,\s]+/).filter(Boolean).map(x => parseInt(x, 10)); };
       let i = 0, deployAfter = false;
       const steps = [
@@ -390,8 +549,8 @@ modules:
         { show: () => box('Worker node categories', ['Nodes in the selected categories become Kubernetes workers.'].concat(catNames().map((n, k) => `  ${k + 1}) ${n}   (${nodesInCategory(n)} nodes)`)).concat(['', 'Enter numbers separated by commas, or press Enter for none.'])), ask: 'Worker categories: ', on: v => { const n = catNames(); const ids = pickList(v); if (ids.some(x => !n[x - 1])) return { err: 'Unknown selection.' }; c.workers = ids.map(x => n[x - 1]); return 1; } },
         { show: () => box('Additional worker nodes', ['Optionally add individual nodes as workers.'].concat(nodeNames().filter(n => !c.controlPlane.includes(n)).map((n, k) => `  ${k + 1}) ${n}`)).concat(['', 'Enter numbers, or press Enter to skip.'])), ask: 'Worker nodes: ', on: v => { const n = nodeNames().filter(x => !c.controlPlane.includes(x)); const ids = pickList(v); if (ids.some(x => !n[x - 1])) return { err: 'Unknown selection.' }; c.nodes = ids.map(x => n[x - 1]); if (!c.workers.length && !c.nodes.length && practice) sh.hint('You selected no workers. The task wants the new category as the worker category; type b to go back.'); return 1; } },
         { show: () => box('Etcd', [`Etcd will run on: ${c.etcd.join(', ')}`]), ask: 'Accept? [Y/n]: ', on: v => /^(|y|yes)$/i.test(v) ? 1 : { err: 'Press Enter to accept.' } },
-        { show: () => box('Operators', ['Install the NVIDIA GPU Operator? (manages drivers, device plugin, DCGM)']), ask: 'Install NVIDIA GPU Operator? [Y/n]: ', on: v => { c.gpuOperator = /^(|y|yes)$/i.test(v); return 1; } },
-        { show: () => box('Summary', [`Version:          v${c.version}`, `Cluster name:     ${c.name}`, `Control plane:    ${c.controlPlane.join(', ')}`, `Worker categories:${c.workers.length ? ' ' + c.workers.join(', ') : ' (none)'}`, `Worker nodes:     ${c.nodes.join(', ') || '(none)'}`, `GPU Operator:     ${c.gpuOperator ? 'yes' : 'no'}`, '', '  1) Save config & deploy', '  2) Save config & exit', '  3) Exit without saving']), ask: 'Select [1-3]: ', on: v => { if (v === '1') { deployAfter = true; return 1; } if (v === '2') { deployAfter = false; return 1; } if (v === '3') return { end: 'Exiting without saving.' }; return { err: 'Please enter 1, 2 or 3.' }; } },
+        { show: () => box('Operators', ['Select operators to install:', '  NVIDIA GPU Operator   drivers, device plugin, DCGM exporter', '  (not selected by default)']), ask: 'Install the NVIDIA GPU Operator? [y/N]: ', on: v => { if (!/^(|y|yes|n|no)$/i.test(v)) return { err: 'Please answer y or n.' }; c.gpuOperator = /^(y|yes)$/i.test(v); return 1; } },
+        { show: () => box('Summary', [`Version:          v${c.version}`, `Cluster name:     ${c.name}`, `Control plane:    ${c.controlPlane.join(', ')}`, `Worker categories: ${c.workers.join(', ') || '(none)'}`, `Worker nodes:     ${c.nodes.join(', ') || '(none)'}`, `GPU Operator:     ${c.gpuOperator ? 'yes' : 'no'}`, '', '  1) Save config & deploy', '  2) Save config & exit', '  3) Exit without saving']), ask: 'Select [1-3]: ', on: v => { if (v === '1') { deployAfter = true; return 1; } if (v === '2') { deployAfter = false; return 1; } if (v === '3') return { end: 'Exiting without saving.' }; return { err: 'Please enter 1, 2 or 3.' }; } },
         { show: () => '', ask: 'Save configuration to [/root/cm-kubernetes-setup.conf]: ', on: v => {
           const path = NL.normPath(v || '/root/cm-kubernetes-setup.conf', sh.cwd, sh.home);
           const e = sh.write(path, configText(c));
@@ -430,7 +589,7 @@ modules:
         { id: 'category', text: `Create a category named ${P.category} by cloning the default category.` },
         { id: 'assign', text: `Configure category ${P.category} to use software image ${P.image}.` },
         { id: 'node', text: `Add a physical node ${P.node} with IP ${P.ip} and MAC ${P.mac}, in category ${P.category}, then power it on.` },
-        { id: 'config', text: `Run cm-kubernetes-setup with the head node as the control plane and ${P.category} as the worker category. Save the configuration to ${P.cfgPath} without deploying.` },
+        { id: 'config', text: `Run cm-kubernetes-setup with the head node as the control plane and ${P.category} as the worker category, and install the NVIDIA GPU Operator. Save the configuration to ${P.cfgPath} without deploying.` },
         { id: 'deploy', text: `Deploy Kubernetes from the saved file ${P.cfgPath}.` }
       ],
       commands: () => ['cmsh', 'cm-kubernetes-setup', 'module', 'ml'].concat(moduleLoaded && k8s ? ['kubectl'] : []),
@@ -520,12 +679,13 @@ modules:
         const ct = sh.read(P.cfgPath);
         let cerr = '';
         if (ct === undefined) cerr = `No configuration file at ${P.cfgPath}.`;
-        else { try { const conf = parseConfig(ct); if (!conf.workers.includes(P.category)) cerr = `The saved configuration does not use ${P.category} as a worker category (it has: ${conf.workers.join(', ') || 'none'}).`; else if (!conf.controlPlane.includes('headnode')) cerr = `The saved configuration does not use the head node as the control plane (${conf.controlPlane.join(', ')}).`; } catch (e) { cerr = `${P.cfgPath} is not a valid setup configuration: ${e.message}`; } }
+        else { try { const conf = parseConfig(ct); if (!conf.workers.includes(P.category)) cerr = `The saved configuration does not use ${P.category} as a worker category (it has: ${conf.workers.join(', ') || 'none'}).`; else if (!conf.gpuOperator) cerr = 'The saved configuration does not install the NVIDIA GPU Operator (answer y at the operator step).'; else if (!conf.controlPlane.includes('headnode')) cerr = `The saved configuration does not use the head node as the control plane (${conf.controlPlane.join(', ')}).`; } catch (e) { cerr = `${P.cfgPath} is not a valid setup configuration: ${e.message}`; } }
         res.push({ id: 'config', pass: !cerr, detail: cerr || `${P.cfgPath} has control plane headnode and worker category ${P.category}.` });
         let derr = '';
         if (!k8s) derr = 'Kubernetes was not deployed.';
         else if (k8s.configPath !== P.cfgPath) derr = `Kubernetes was deployed from ${k8s.configPath}, not ${P.cfgPath}.`;
         else if (!k8s.workers.includes(P.category)) derr = `The deployed cluster does not include worker category ${P.category}.`;
+        else if (!k8s.gpuOperator) derr = 'The deployed cluster does not include the NVIDIA GPU Operator.';
         res.push({ id: 'deploy', pass: !derr, detail: derr || `Kubernetes was deployed from ${P.cfgPath}${k8s.method === 'wizard' ? ' (using "Save config & deploy" in the wizard; the task wording suggests saving first, then cm-kubernetes-setup -c)' : ' with cm-kubernetes-setup -c'}.` });
         const notes = [];
         if (ev.quitDirty) notes.push('At some point you left cmsh with uncommitted changes, which were discarded.');
@@ -536,7 +696,7 @@ modules:
         const dir = NL.dirname(P.cfgPath);
         return ['cmsh', 'softwareimage', `clone default-image ${P.image}`, 'commit', 'category', `clone default ${P.category}`, 'commit', `use ${P.category}`, `set softwareimage ${P.image}`, 'commit', 'device', `add physicalnode ${P.node} ${P.ip}`, `set category ${P.category}`, `set mac ${P.mac}`, 'commit', `power on -n ${P.node}`, `status -n ${P.node}`, 'quit']
           .concat(dir !== '/root' ? [`mkdir -p ${dir}`] : [])
-          .concat(['cm-kubernetes-setup', '#  Deploy → version → name → accept networks → control plane: headnode', `#  worker categories: ${P.category} → Enter → Enter → GPU operator → "Save config & exit"`, `#  save to ${P.cfgPath}`, `cm-kubernetes-setup -c ${P.cfgPath}`, 'module load kubernetes', 'kubectl get nodes']);
+          .concat(['cm-kubernetes-setup', '#  Deploy → version → name → accept networks → control plane: headnode', `#  worker categories: ${P.category} → Enter → Enter → GPU Operator: y → "Save config & exit"`, `#  save to ${P.cfgPath}`, `cm-kubernetes-setup -c ${P.cfgPath}`, 'module load kubernetes', 'kubectl get nodes']);
       }
     };
     sh.lab = lab;

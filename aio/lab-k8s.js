@@ -39,21 +39,23 @@
   function create(cfg) {
     const mode = cfg.mode || 'practice', practice = mode === 'practice';
     const seed = cfg.seed >>> 0, r = NL.rng(seed);
-    const sh = new NL.Shell({ mode: mode, user: 'student', host: 'headnode', now: cfg.now });
+    const asRoot = cfg.user !== 'student'; // the exam ran as root with paths like /root/lab2/hello-job.yaml
+    const H = asRoot ? '/root' : '/home/student';
+    const sh = new NL.Shell({ mode: mode, user: asRoot ? 'root' : 'student', home: H, host: 'headnode', now: cfg.now });
     const jobChoices = [['data-prep', 'Data preparation finished'], ['train-check', 'Training check passed'], ['gpu-smoke', 'GPU smoke test OK'], ['etl-batch', 'ETL batch done']];
     const jc = NL.pick(r, jobChoices);
     const P = practice ? {
-      jobName: 'training', jobImage: 'busybox:1.36', jobMsg: 'Training job complete', jobPath: '/home/student/jobs/training.yaml',
-      podName: 'inference', podImage: 'nginx:1.27', podPath: '/home/student/workloads/inference.yaml',
+      jobName: 'training', jobImage: 'busybox:1.36', jobMsg: 'Training job complete', jobPath: asRoot ? '/root/lab2/training-job.yaml' : '/home/student/jobs/training.yaml',
+      podName: 'inference', podImage: 'nginx:1.27', podPath: asRoot ? '/root/lab2/inference-pod.yaml' : '/home/student/workloads/inference.yaml',
       runName: 'inference-direct', runImage: 'nginx:1.27', logMode: 'show', logPath: null, seed: seed
     } : (() => {
       const podName = NL.pick(r, ['web-frontend', 'inference-api', 'model-server']);
       const logMode = NL.pick(r, ['show', 'save']);
       return {
-        jobName: jc[0], jobImage: 'busybox:1.36', jobMsg: jc[1], jobPath: `/home/student/${NL.pick(r, ['jobs', 'manifests', 'k8s'])}/${jc[0]}.yaml`,
-        podName: podName, podImage: NL.pick(r, ['nginx:1.27', 'httpd:2.4']), podPath: `/home/student/${NL.pick(r, ['workloads', 'apps', 'deploy'])}/${podName}.yaml`,
+        jobName: jc[0], jobImage: 'busybox:1.36', jobMsg: jc[1], jobPath: `${H}/${NL.pick(r, asRoot ? ['lab2', 'manifests', 'k8s'] : ['jobs', 'manifests', 'k8s'])}/${jc[0]}.yaml`,
+        podName: podName, podImage: NL.pick(r, ['nginx:1.27', 'httpd:2.4']), podPath: `${H}/${NL.pick(r, asRoot ? ['lab2', 'apps', 'deploy'] : ['workloads', 'apps', 'deploy'])}/${podName}.yaml`,
         runName: NL.pick(r, ['cache', 'web-direct', 'api-direct']), runImage: NL.pick(r, ['redis:7.2', 'nginx:1.27', 'httpd:2.4']),
-        logMode: logMode, logPath: logMode === 'save' ? `/home/student/${jc[0]}-logs.txt` : null, seed: seed
+        logMode: logMode, logPath: logMode === 'save' ? `${H}/${jc[0]}-logs.txt` : null, seed: seed
       };
     })();
     sh.mkdirp(NL.dirname(P.jobPath)); sh.mkdirp(NL.dirname(P.podPath)); // on the exam the folders already exist
@@ -304,7 +306,53 @@
     function podRows(list) {
       return list.map(p => { const s = pstatus(p); return { name: p.name, ready: s.ready, st: s.st, rs: String(s.restarts) + (s.restarts ? ` (${NL.age(Math.max(1000, (sh.now() - p.created) % 12000))} ago)` : ''), age: NL.age(sh.now() - p.created), ip: s.st === 'ContainerCreating' ? '<none>' : p.ip, node: p.node }; });
     }
+    const PREFIX = { pods: 'pod/', jobs: 'job.batch/', deployments: 'deployment.apps/', nodes: 'node/', services: 'service/', replicasets: 'replicaset.apps/', namespaces: 'namespace/' };
+    function retable(lines, prefix, nsCols) {
+      // rebuild one aligned table from rows of several single-object tables (columns are 3+ spaces apart)
+      const rows = lines.map(l => l.split(/\s{3,}/));
+      const hdr = rows.shift();
+      if (prefix) rows.forEach(r => { r[nsCols] = prefix + r[nsCols]; });
+      return NL.table(hdr, rows, { sep: '   ' });
+    }
+    function getNames(type, names, f, multi) {
+      const k = RES[type], o = f.o || f.output || '', plain = !['name', 'yaml', 'json'].includes(o);
+      const nsCols = nsOf(f) === '*' ? 1 : 0;
+      if (!names.length) {
+        const r = get1(Object.assign({}, f, { _: [type] }));
+        if (r.code || !multi || !plain || /^No resources found/.test(r.out)) return r;
+        return ok(retable(r.out.split('\n'), PREFIX[k], nsCols));
+      }
+      let header = null; const rows = [], errs = [], others = [];
+      names.forEach(n => {
+        const r = get1(Object.assign({}, f, { _: [type, n] }));
+        if (r.code) { errs.push(r.err); return; }
+        if (!plain) { others.push(r.out); return; }
+        const ls = r.out.split('\n'); header = header || ls[0]; rows.push(...ls.slice(1));
+      });
+      const out = !plain ? others.join(o === 'yaml' ? '\n---\n' : '\n') : rows.length ? retable([header].concat(rows), multi ? PREFIX[k] : '', nsCols) : '';
+      return { out: out, err: errs.join('\n'), code: errs.length ? 1 : 0 };
+    }
     function get(f) {
+      const args = f._;
+      if (args.length <= 1 && !(args[0] || '').includes(',')) return get1(f);
+      const groups = [];
+      if (args.every(x => x.includes('/'))) {
+        args.forEach(x => { const [t, n] = x.split('/'); const g = groups.find(y => RES[y[0]] === RES[t]); if (g) g[1].push(n); else groups.push([t, [n]]); });
+      } else {
+        const types = args[0].split(',').filter(Boolean), names = args.slice(1);
+        if (args.slice(1).some(x => x.includes('/'))) return fail('error: there is no need to specify a resource type as a separate argument when passing arguments in resource/name form (e.g. \'kubectl get resource/<resource_name>\' instead of \'kubectl get resource resource/<resource_name>\'');
+        if (types.length > 1 && names.length) return fail('error: arguments in resource/name form must have a single resource and name');
+        types.forEach(t => groups.push([t, names]));
+      }
+      const bad = groups.find(g => !RES[g[0]]);
+      if (bad) return fail(`error: the server doesn't have a resource type "${bad[0]}"`);
+      const multi = groups.length > 1;
+      const outs = [], errs = [];
+      groups.forEach(([t, names]) => { const r = getNames(t, names, f, multi); if (r.out && !(multi && /^No resources found/.test(r.out))) outs.push(r.out); if (r.err) errs.push(r.err); });
+      if (!outs.length && !errs.length) { const ns = nsOf(f); return ok(ns === '*' ? 'No resources found' : `No resources found in ${ns} namespace.`); }
+      return { out: outs.join('\n\n'), err: errs.join('\n'), code: errs.length ? 1 : 0 };
+    }
+    function get1(f) {
       const kind = RES[f._[0]];
       const rest = f._.slice(1);
       let target = rest[0];
@@ -329,7 +377,8 @@
       const userNs = ns === 'default' || all;
       if (k === 'pods' || k === 'all') {
         let list = userNs ? Object.values(pods).filter(p => !target || p.name === target).sort((a, b) => a.name < b.name ? -1 : 1) : [];
-        if (target && !list.length && k === 'pods') return fail(`Error from server (NotFound): pods "${target}" not found`);
+        const sysList = SYS.filter(([n, sn]) => (all || sn === ns) && (!target || n === target));
+        if (target && !list.length && k === 'pods' && !sysList.length) return fail(`Error from server (NotFound): pods "${target}" not found`);
         if (f.l || f.selector) { const sel = (f.l || f.selector).split(',').map(x => x.split('=')); list = list.filter(p => sel.every(([a, b]) => p.labels[a] === b)); }
         if (target && (o === 'yaml' || o === 'json')) {
           const p = list[0], s = pstatus(p);
@@ -338,7 +387,7 @@
         }
         if (o === 'name') return ok(list.map(p => 'pod/' + p.name).join('\n'));
         let rowsData = podRows(list).map(x => (all ? ['default'] : []).concat([(k === 'all' ? 'pod/' : '') + x.name, x.ready, x.st, x.rs, x.age]).concat(wide ? [x.ip, x.node, '<none>', '<none>'] : []));
-        if (all && k === 'pods') rowsData = SYS.map(([n, s]) => [s, n, '1/1', 'Running', '0', '12d'].concat(wide ? ['10.244.0.' + (n.length % 200), 'node00' + (1 + n.length % 3), '<none>', '<none>'] : [])).concat(rowsData);
+        if (k === 'pods' && (all || !userNs)) rowsData = sysList.map(([n, sn]) => (all ? [sn] : []).concat([n, '1/1', 'Running', '0', '12d']).concat(wide ? ['10.244.0.' + (n.length % 200), 'node00' + (1 + n.length % 3), '<none>', '<none>'] : [])).concat(rowsData);
         const hdr = nsCol.concat(['NAME', 'READY', 'STATUS', 'RESTARTS', 'AGE']).concat(wide ? ['IP', 'NODE', 'NOMINATED NODE', 'READINESS GATES'] : []);
         if (k === 'pods') { if (!rowsData.length) return emptyMsg(); const t = NL.table(hdr, rowsData, { sep: '   ' }); return ok(noHead ? t.split('\n').slice(1).join('\n') : t); }
         // all
@@ -422,6 +471,21 @@
       return fail(`error: the server doesn't have a resource type "${f._[0]}"`);
     }
     function logs(f) {
+      const selector = f.l || f.selector;
+      if (selector && !f._[0]) {
+        const sel = String(selector).split(',').map(x => x.split('='));
+        const list = Object.values(pods).filter(p => sel.every(([a, b]) => p.labels[a] === b)).sort((a, b) => a.name < b.name ? -1 : 1);
+        if (!list.length) return ok('No resources found in default namespace.');
+        const tail = f.tail !== undefined ? parseInt(f.tail, 10) : 10; // with a selector kubectl defaults to the last 10 lines per pod
+        const outs = [];
+        list.forEach(p => {
+          const s = pstatus(p); if (s.bad || s.st === 'ContainerCreating') return;
+          let lines = podLogs(p); if (tail >= 0) lines = lines.slice(Math.max(0, lines.length - tail));
+          if (p.owner && p.owner.kind === 'Job' && p.owner.name === P.jobName && lines.length) lastJobLogs = lines.join('\n');
+          outs.push(...lines);
+        });
+        return ok(outs.join('\n'));
+      }
       let t = f._[0] || (typeof f.f === 'string' ? f.f : undefined); // -f is --follow for logs
       if (!t) return fail('error: expected \'logs [-f] [-p] (POD | TYPE/NAME) [-c CONTAINER]\'.\nPOD or TYPE/NAME is a required argument for the logs command\nSee \'kubectl logs -h\' for help and examples');
       let p;
@@ -507,7 +571,7 @@
       return { out: outs.join('\n'), err: errs.join('\n'), code: errs.length ? 1 : 0 };
     }
     function delOne(k, n) {
-      if (k === 'pods') { if (!pods[n]) return fail(`Error from server (NotFound): pods "${n}" not found`); delete pods[n]; return ok(`pod "${n}" deleted`); }
+      if (k === 'pods') { if (!pods[n]) return fail(`Error from server (NotFound): pods "${n}" not found`); delete pods[n]; if (n === P.podName || n === P.runName) ev.verify = false; return ok(`pod "${n}" deleted`); }
       if (k === 'jobs') { const j = jobs[n]; if (!j) return fail(`Error from server (NotFound): jobs.batch "${n}" not found`); delete pods[j.podName]; delete jobs[n]; return ok(`job.batch "${n}" deleted`); }
       if (k === 'deployments') { const d = deps[n]; if (!d) return fail(`Error from server (NotFound): deployments.apps "${n}" not found`); d.pods.forEach(p => delete pods[p]); delete deps[n]; return ok(`deployment.apps "${n}" deleted`); }
       return fail(`error: the server doesn't have a resource type "${k}"`);
@@ -560,7 +624,7 @@
     const lab = {
       id: 'k8s', params: P, shell: sh,
       title: 'Lab 2 · Kubernetes',
-      intro: 'You are logged in to the head node of a BCM-managed cluster as student. Kubernetes is installed but its client tools are provided through an environment module.',
+      intro: `You are logged in to the head node of a BCM-managed cluster as ${asRoot ? 'root' : 'student'}. Kubernetes is installed but its client tools are provided through an environment module.`,
       tasks: () => [
         { id: 'env', text: 'Load the Kubernetes environment module and confirm all cluster nodes are Ready.' },
         { id: 'jobfile', text: `Save this Job manifest to ${P.jobPath}:`, manifest: JOB_YAML.join('\n') },
@@ -654,7 +718,8 @@
         else if (q.source.how !== 'run') qerr = `Pod ${P.runName} was created from a file; the task asked for kubectl run.`;
         else if (pstatus(q).st !== 'Running') qerr = `Pod ${P.runName} is ${pstatus(q).st}, not Running.`;
         res.push({ id: 'runpod', pass: !qerr, detail: qerr || `Pod ${P.runName} was created with kubectl run and is Running.` });
-        res.push({ id: 'verify', pass: ev.verify, detail: ev.verify ? 'You listed both Pods while they were Running.' : 'You never listed both Pods in Running state together (kubectl get pods).' });
+        const bothRunning = [P.podName, P.runName].every(n => pods[n] && pstatus(pods[n]).st === 'Running');
+        res.push({ id: 'verify', pass: ev.verify && bothRunning, detail: !bothRunning ? `Both Pods must still be Running at the end; ${[P.podName, P.runName].filter(n => !pods[n] || pstatus(pods[n]).st !== 'Running').join(' and ')} ${[P.podName, P.runName].filter(n => !pods[n] || pstatus(pods[n]).st !== 'Running').length > 1 ? 'are' : 'is'} not.` : ev.verify ? 'You listed both Pods while they were Running.' : 'You never listed both Pods in Running state together (kubectl get pods).' });
         const notes = [];
         Object.values(pods).filter(x => !x.owner && ![P.podName, P.runName].includes(x.name)).forEach(x => notes.push(`Extra Pod left behind: ${x.name} (${pstatus(x).st}).`));
         return { results: res, notes: notes };
