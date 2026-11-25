@@ -222,7 +222,12 @@
     if (mode === 'practice' || s.submitted) { try { g = s.submitted ? s.submitted.grade : lab.grade(); } catch (err) { console.error(err); } }
     const pass = g ? Object.fromEntries(g.results.map(x => [x.id, x.pass])) : {};
     const ol = $('tasks'); ol.textContent = '';
-    tasks.forEach(t => { const li = document.createElement('li'); li.textContent = t.text; if (pass[t.id] && mode === 'practice') li.className = 'done'; ol.appendChild(li); });
+    tasks.forEach(t => {
+      const li = document.createElement('li'); li.textContent = t.text;
+      if (t.manifest) { const pre = document.createElement('pre'); pre.className = 'manifest'; pre.textContent = t.manifest; li.appendChild(pre); }
+      if (pass[t.id] && mode === 'practice') li.className = 'done';
+      ol.appendChild(li);
+    });
     $('progress').textContent = mode === 'practice' && g ? `${g.results.filter(x => x.pass).length}/${g.results.length} checks passing` : s.submitted ? '' : 'Graded on submit';
   }
   function report(g, final) {

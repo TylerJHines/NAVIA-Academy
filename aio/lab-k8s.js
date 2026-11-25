@@ -56,7 +56,10 @@
         logMode: logMode, logPath: logMode === 'save' ? `/home/student/${jc[0]}-logs.txt` : null, seed: seed
       };
     })();
-    sh.mkdirp(NL.dirname(P.jobPath)); // the job directory exists; the workload directory does not
+    sh.mkdirp(NL.dirname(P.jobPath)); sh.mkdirp(NL.dirname(P.podPath)); // on the exam the folders already exist
+    // the exam gives you the manifests; you save them to the exact path and apply them
+    const JOB_YAML = ['apiVersion: batch/v1', 'kind: Job', 'metadata:', `  name: ${P.jobName}`, 'spec:', '  template:', '    spec:', '      restartPolicy: Never', '      containers:', `      - name: ${P.jobName}`, `        image: ${P.jobImage}`, `        command: ["sh", "-c", "echo ${P.jobMsg}"]`];
+    const POD_YAML = ['apiVersion: v1', 'kind: Pod', 'metadata:', `  name: ${P.podName}`, 'spec:', '  containers:', `  - name: ${P.podName}`, `    image: ${P.podImage}`, '    ports:', '    - containerPort: 80'];
     const t0 = sh.now();
 
     let moduleLoaded = false;
@@ -560,10 +563,10 @@
       intro: 'You are logged in to the head node of a BCM-managed cluster as student. Kubernetes is installed but its client tools are provided through an environment module.',
       tasks: () => [
         { id: 'env', text: 'Load the Kubernetes environment module and confirm all cluster nodes are Ready.' },
-        { id: 'jobfile', text: `Write a Job manifest at ${P.jobPath}: Job name ${P.jobName}, image ${P.jobImage}, and the container must print "${P.jobMsg}".` },
-        { id: 'jobrun', text: `Create the Job from that file and wait for it to complete.` },
+        { id: 'jobfile', text: `Save this Job manifest to ${P.jobPath}:`, manifest: JOB_YAML.join('\n') },
+        { id: 'jobrun', text: `Create the Job from that file and confirm it completes.` },
         { id: 'joblogs', text: P.logMode === 'save' ? `Save the Job's logs to ${P.logPath}.` : 'Display the Job\'s logs.' },
-        { id: 'podfile', text: `Write a Pod manifest at ${P.podPath} for a Pod named ${P.podName} using image ${P.podImage}, and create the Pod from that file.` },
+        { id: 'podfile', text: `Save this Pod manifest to ${P.podPath}, then create the Pod from that file:`, manifest: POD_YAML.join('\n') },
         { id: 'runpod', text: `Run a second Pod named ${P.runName} directly from the image ${P.runImage}, without a manifest file.` },
         { id: 'verify', text: 'Confirm that both Pods are Running.' }
       ],
@@ -657,13 +660,14 @@
         return { results: res, notes: notes };
       },
       solution() {
-        const jdir = NL.dirname(P.jobPath), pdir = NL.dirname(P.podPath);
         return ['module load kubernetes', 'kubectl get nodes',
-          `cat <<'EOF' > ${P.jobPath}`, 'apiVersion: batch/v1', 'kind: Job', 'metadata:', `  name: ${P.jobName}`, 'spec:', '  template:', '    spec:', '      restartPolicy: Never', '      containers:', `      - name: ${P.jobName}`, `        image: ${P.jobImage}`, `        command: ["sh", "-c", "echo ${P.jobMsg}"]`, 'EOF',
-          `kubectl apply -f ${P.jobPath}`, `kubectl wait --for=condition=complete job/${P.jobName} --timeout=60s`, 'kubectl get jobs',
+          `vi ${P.jobPath}`, '#  press i, paste the Job manifest from the task, press Esc, type :wq',
+          `cat ${P.jobPath}`, `kubectl apply -f ${P.jobPath}`, 'kubectl get jobs', '#  repeat kubectl get jobs until STATUS is Complete',
           P.logMode === 'save' ? `kubectl logs job/${P.jobName} > ${P.logPath}` : `kubectl logs job/${P.jobName}`,
-          `mkdir -p ${pdir}`, `kubectl run ${P.podName} --image=${P.podImage} --dry-run=client -o yaml > ${P.podPath}`, `cat ${P.podPath}`, `kubectl apply -f ${P.podPath}`,
-          `kubectl run ${P.runName} --image=${P.runImage}`, 'kubectl get pods'].concat(jdir === pdir ? [] : []);
+          `vi ${P.podPath}`, '#  press i, paste the Pod manifest from the task, press Esc, type :wq',
+          `cat ${P.podPath}`, `kubectl apply -f ${P.podPath}`,
+          `kubectl run ${P.runName} --image=${P.runImage}`, 'kubectl get pods',
+          '#  nano works too: nano <path>, paste, Ctrl+O, Enter, Ctrl+X'];
       }
     };
     sh.lab = lab;

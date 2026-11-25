@@ -558,6 +558,15 @@
       if (x === '-' || x === '-l' || x === '--login') login = true;
       else if (x === '-c' || x === '--command') cmd = a[++i];
       else if (x.startsWith('--command=')) cmd = x.slice(10);
+      else if (/^-[^-]/.test(x)) {
+        // short options like real su (util-linux): -l -m -p -f -P take no value; -c -g -G -s -w take one
+        for (let j = 1; j < x.length; j++) {
+          const ch = x[j];
+          if ('lmpfP'.includes(ch)) { if (ch === 'l') login = true; continue; }
+          if ('cgGsw'.includes(ch)) { const v = x.slice(j + 1) || a[++i]; if (ch === 'c') cmd = v; break; }
+          return NL.fail(`su: invalid option -- '${ch}'\nTry 'su --help' for more information.`);
+        }
+      }
       else if (!x.startsWith('-')) target = x;
     }
     const known = this.lab && this.lab.users ? this.lab.users(this) : ['root', this.user];
