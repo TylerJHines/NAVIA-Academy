@@ -133,7 +133,7 @@
 
     /* ---- job history ---- */
     const jobs = [];
-    const J = o => { const j = Object.assign({ partition: 'defq', cpus: 16, gpus: 8, exit: '0:0', mem: 32768, account: o.user === 'student' ? 'student' : o.user === 'research' ? 'research' : 'ml-team', workdir: `/home/${o.user}` }, o); if (j.maxrss === undefined) j.maxrss = j.end ? Math.round(j.mem * 1024 * (0.2 + 0.5 * r())) : null; if (!j.script) j.script = `/home/${j.user}/${j.name}.sh`; jobs.push(j); };
+    const J = o => { const j = Object.assign({ partition: 'defq', cpus: 16, gpus: 8, exit: '0:0', mem: 32768, account: o.user === 'student' ? 'student' : o.user === 'research' ? 'research' : 'ml-team', workdir: `/home/${o.user}` }, o); if (j.maxrss === undefined) j.maxrss = j.end ? Math.round(j.mem * 1024 * (0.2 + 0.5 * r())) : null; if (!j.script) j.script = `/home/${j.user}/${j.name}.sh`; if (!j.stdout) j.stdout = `${j.workdir}/slurm-${j.id}.out`; jobs.push(j); };
     J({ id: base - 6, name: 'hpl-bench', user: 'student', state: 'TIMEOUT', node: busyNode, submit: midnight - 5.2 * 3600e3, start: midnight - 5 * 3600e3, end: midnight - 1 * 3600e3, cpus: 112 });
     J({ id: base - 4, name: 'data-sync', user: 'mlops', state: 'COMPLETED', node: drainNode, submit: at(0.30), start: at(0.31), end: at(0.45), cpus: 8, gpus: 0 });
     J({ id: base - 2, name: 'preprocess', user: 'student', state: 'COMPLETED', node: busyNode, submit: at(0.70), start: at(0.71), end: at(0.73), cpus: 4, gpus: 0 });
@@ -387,6 +387,7 @@ echo "Job $SLURM_JOB_ID finished on $(hostname) at $(date)"
       maxvmsize: ['MaxVMSize', 10, (j, st) => !st || !j.end || j.maxrss == null ? '' : st === 'batch' ? Math.round(j.maxrss * 1.21) + 'K' : '4364K'],
       reqcpus: ['ReqCPUS', 8, j => String(j.cpus)], reqnodes: ['ReqNodes', 8, () => '1'], allocnodes: ['AllocNodes', 10, () => '1'],
       cputime: ['CPUTime', 10, j => j.start ? NL.elapsed(((j.end || sh.now()) - j.start) * j.cpus) : '00:00:00'], group: ['Group', 9, j => j.user], qos: ['QOS', 10, () => 'normal'], priority: ['Priority', 10, () => '1'],
+      submitline: ['SubmitLine', 20, (j, st) => st ? '' : j.submitLine || `sbatch ${NL.basename(j.script || '')}`],
       derivedexitcode: ['DerivedExitCode', 10, j => j.exit], uid: ['UID', 6, j => String(UIDS[j.user])], cluster: ['Cluster', 10, () => 'slurm'], comment: ['Comment', 10, () => '']
     };
     function sacct(argv, ctx) {
@@ -617,7 +618,7 @@ echo "Job $SLURM_JOB_ID finished on $(hostname) at $(date)"
         else if (/^(cd|export|module|source|set|ml)\b/.test(c)) { /* environment, no output */ }
         else { const cmd = c.split(/\s+/)[0]; lines.push(`/var/spool/slurmd/job${id}/slurm_script: line ${text.split('\n').indexOf(l) + 1}: ${cmd}: command not found`); }
       });
-      const j = { mem: memMB === null ? 2063937 : memMB, need: need, oom: oomed, maxrss: null, id: id, name: o.J || NL.basename(scriptPath), user: user(ctx), account: user(ctx) === 'student' ? 'student' : 'ml-team', partition: 'defq', state: 'PENDING', exit: '0:0', node: null, submit: sh.now(), start: null, end: null, cpus: 1, gpus: gpus, mine: true, script: scriptPath, workdir: workdir, stdout: stdout, outLines: lines.length ? lines : [''], runtime: Math.min(runtime, 240000), reqNodes: reqNodes, held: !!o.H, timelimit: 300e3 };
+      const j = { submitLine: argv.join(' '), mem: memMB === null ? 2063937 : memMB, need: need, oom: oomed, maxrss: null, id: id, name: o.J || NL.basename(scriptPath), user: user(ctx), account: user(ctx) === 'student' ? 'student' : 'ml-team', partition: 'defq', state: 'PENDING', exit: '0:0', node: null, submit: sh.now(), start: null, end: null, cpus: 1, gpus: gpus, mine: true, script: scriptPath, workdir: workdir, stdout: stdout, outLines: lines.length ? lines : [''], runtime: Math.min(runtime, 240000), reqNodes: reqNodes, held: !!o.H, timelimit: 300e3 };
       jobs.push(j);
       ctlLog(sh.now(), `_slurm_rpc_submit_batch_job: JobId=${id} InitPrio=1 usec=412`);
       sync();
