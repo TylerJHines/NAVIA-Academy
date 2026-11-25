@@ -11,7 +11,7 @@
   let timerId = null;
   let examLimit = 20; // minutes for new exam sessions; changed with the Time limit menu
 
-  let loginUser = 'root', slurmVariant = 'both'; // Labs 1 and 2 log in as root like the exam, or as student with sudo
+  let loginUser = 'root'; // Labs 1 and 2 log in as root like the exam, or as student with sudo
   try { const m = localStorage.getItem('navia-aio-lab-mode'); if (m === 'exam' || m === 'practice') mode = m; } catch (e) { /* storage unavailable */ }
   try { const u = localStorage.getItem('navia-aio-lab-user'); if (u === 'root' || u === 'student') loginUser = u; } catch (e) { /* storage unavailable */ }
 
@@ -19,7 +19,7 @@
     try { const a = new Uint32Array(1); crypto.getRandomValues(a); return 100000 + (a[0] % 900000); } catch (e) { return 100000 + Math.floor(Math.random() * 900000); }
   }
   function makeSession(m, id, seed) {
-    const lab = NL.labs[id].create({ mode: m, seed: seed, user: loginUser, variant: slurmVariant });
+    const lab = NL.labs[id].create({ mode: m, seed: seed, user: loginUser });
     return { id: id, lab: lab, seed: seed, lines: [], hist: [], hi: 0, draft: '', started: Date.now(), limit: m === 'exam' ? examLimit : 0, submitted: null, cmds: 0, report: null };
   }
   function cur() {
@@ -296,8 +296,6 @@
     $('submit').hidden = mode !== 'exam'; $('submit').disabled = !!s.submitted;
     $('check').hidden = mode !== 'practice';
     $('new').hidden = mode !== 'exam';
-    $('practice-variant').hidden = !(mode === 'practice' && active === 'slurm');
-    $('slurm-variant').value = slurmVariant;
     $('login-user').value = loginUser;
     $('sol-wrap').hidden = mode === 'exam' && !s.submitted;
     $('solution').textContent = lab.solution().join('\n');
@@ -330,11 +328,6 @@
     loginUser = v; try { localStorage.setItem('navia-aio-lab-user', v); } catch (e) { /* ignore */ }
     ['practice', 'exam'].forEach(m => { delete sessions[m].slurm; delete sessions[m].k8s; });
     renderAll();
-  });
-  $('slurm-variant').addEventListener('change', () => {
-    const v = $('slurm-variant').value, s = sessions.practice.slurm;
-    if (s && s.cmds > 0 && !window.confirm('Switching the scenario restarts Lab 1. Continue?')) { $('slurm-variant').value = slurmVariant; return; }
-    slurmVariant = v; delete sessions.practice.slurm; renderAll();
   });
   $('check').addEventListener('click', () => report(cur().lab.grade(), false));
   $('submit').addEventListener('click', () => { const s = cur(); if (window.confirm(`Submit ${s.lab.title}? You cannot change anything afterwards.`)) submit(false); });

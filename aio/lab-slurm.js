@@ -69,7 +69,9 @@
     const drainNode = practice ? 'node001' : NL.pick(r, rest);
     const busyNode = rest.filter(n => n !== drainNode)[practice ? 1 : NL.int(r, 0, 1)];
     // node failure (crash / munge / stopped) or a job-level failure (oom)
-    const cause = practice ? (cfg.variant === 'oom' ? 'oom' : 'crash') : NL.pick(r, ['crash', 'munge', 'stopped', 'oom']);
+    // Lab 1 is a node failure: practice uses a slurmd crash; exam picks one of three node causes.
+    // (The out-of-memory job variant is kept in the code but switched off; add 'oom' here to bring it back.)
+    const cause = practice ? 'crash' : NL.pick(r, ['crash', 'munge', 'stopped']);
     const nodeFail = cause !== 'oom';
     const base = practice ? 5817 : NL.int(r, 2100, 89000);
     const owner = practice ? 'dana' : NL.pick(r, ['dana', 'lee', 'omar', 'priya']);
@@ -86,7 +88,7 @@
     const pid = () => NL.int(r, 1100, 9800);
 
     // Practice "both" drill: a second job, owned by someone else, ran out of memory on a healthy node
-    const both = practice && cfg.variant === 'both';
+    const both = false; // the two-failure practice drill is switched off
     const M = both ? { id: base - 1, owner: 'lee', script: 'finetune.sh', path: '/home/lee/finetune.sh', home: '/home/lee', node: NODES.find(n => ![failNode, drainNode, busyNode].includes(n)), reqMem: 16, dataGiB: 40 } : null;
     const failedFor = p => p === ownerScript ? { owner: owner, script: script, oom: cause === 'oom', data: dataGiB } : M && p === M.path ? { owner: M.owner, script: M.script, oom: true, data: M.dataGiB } : null;
     const P = { failNode, drainNode, busyNode, cause, failId: base, failName, owner, script, ownerScript, reqMem, dataGiB, asRoot, seed, both, oomJob: M && { id: M.id, owner: M.owner, script: M.script, node: M.node } };
@@ -811,7 +813,7 @@ echo "Job $SLURM_JOB_ID finished on $(hostname) at $(date)"
       ] : [
         { id: 'find', text: 'A job failed today. No job ID is given: find the failed job, its owner and the node it ran on.' },
         { id: 'cause', text: 'Find out why it failed.' },
-        { id: 'restore', text: 'Fix the cause of the failure. If a node was affected, return it to service.' },
+        { id: 'restore', text: 'Fix the problem on the node and return the node to service.' },
         { id: 'submit', text: 'Resubmit the failed job as its owner. When it completes, display its output file.' },
         { id: 'drain', text: `Drain ${drainNode} for maintenance (use any reason) and confirm its state.` }
       ],

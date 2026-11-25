@@ -14,7 +14,7 @@
   .seg button+button{border-left:1px solid #3b5272}
   .seg button[aria-pressed="true"]{background:#176e66;color:#fff}
   .lab-tabs{display:flex;flex-wrap:wrap;gap:8px}
-  .login-opt select,#practice-variant select,#time-limit{background:#16273d;color:#e6eef8;border:1px solid #3b5272;border-radius:8px;padding:8px 10px;font:inherit;margin-left:6px}
+  .login-opt select,#time-limit{background:#16273d;color:#e6eef8;border:1px solid #3b5272;border-radius:8px;padding:8px 10px;font:inherit;margin-left:6px}
   .lab-tabs button{background:#19283e;color:#c8d7e9;border:1px solid #334660;border-radius:9px;padding:10px 14px;cursor:pointer;font:inherit}
   .lab-tabs button[aria-selected="true"]{background:#223a5d;border-color:#6d8fbd;color:#fff}
   .lab-grid{display:grid;grid-template-columns:minmax(300px,.85fr) minmax(0,1.5fr);gap:16px;align-items:start}
@@ -106,15 +106,6 @@
     </div>
     <p id="intro" class="small"></p>
     <ol id="tasks" class="tasks"></ol>
-    <div id="practice-variant" class="row" hidden>
-      <label class="small">Practice scenario
-        <select id="slurm-variant">
-          <option value="both" selected>Both failures (full drill)</option>
-          <option value="node">Node failure only (slurmd)</option>
-          <option value="oom">Out-of-memory job only</option>
-        </select>
-      </label>
-    </div>
     <div id="exam-controls" class="row" hidden>
       <label class="small">Time limit
         <select id="time-limit">
@@ -154,10 +145,10 @@
   </section>
 </div>
 
-<script src="lab-core.js?v=11"></script>
-<script src="lab-slurm.js?v=11"></script>
-<script src="lab-k8s.js?v=11"></script>
-<script src="lab-bcm.js?v=11"></script>
-<script src="exam-recall.js?v=11"></script>
+<script src="lab-core.js?v=12"></script>
+<script src="lab-slurm.js?v=12"></script>
+<script src="lab-k8s.js?v=12"></script>
+<script src="lab-bcm.js?v=12"></script>
+<script src="exam-recall.js?v=12"></script>
 </body>
 </html>

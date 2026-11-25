@@ -13,7 +13,7 @@ Based on one candidate's description of the exam's three lab simulations. These 
 | Checklist | Ticks off live as the simulated state changes | Hidden until you submit |
 | Grading | "Check my work" at any time | Only on **Submit lab**, then the terminal locks |
 | Timer | None | 15/20/30/45 min or no limit; auto-submits at 0 |
-| Lab 1 scenario | Choose: **both failures (full drill, default)**, node failure only, or out-of-memory job only | One random failure, as on the exam: slurmd crash, munge killed, slurmd disabled after reboot, or OOM job |
+| Lab 1 scenario | Node failure: slurmd crashed on node002 | One random node failure: slurmd crash, munge killed, or slurmd disabled after a reboot |
 | Solution | Always available | Shown after submit |
 
 **Log in as** (top bar): `root`, as on the exam (default, paths like `/root/lab2/...`), or `student` with sudo. It applies to Labs 1 and 2; Lab 3 is always root.
@@ -23,7 +23,7 @@ Grading checks the **final state** of the simulated system (node state, objects 
 ## Files
 
 - `aio/lab-core.js`: simulated bash (quotes, `;` `&&` `||`, pipes with grep/head/tail/wc, `>`/`>>` redirects, heredocs, globs, `sudo`, `ssh`), a virtual filesystem, a nano/vi editor, tab completion and a YAML parser that reports errors in kubectl/go-yaml style.
-- `aio/lab-slurm.js`: Lab 1. sinfo/squeue/sacct/scontrol/sbatch/scancel with real option parsing; systemctl/journalctl on nodes; munge/unmunge. A failed job owned by another user (`dana` in practice) must be found, fixed and resubmitted as its owner (`su - dana -c "sbatch train.sh"`). Failure causes: slurmd segfault, munge OOM-killed, slurmd disabled after a reboot, or the job itself running out of memory (found with `sacct -j ID --format=JobID,State,ReqMem,MaxRSS,WorkDir`, fixed with `sbatch --mem=...` as the owner). The practice full drill combines both: dana's `train.sh` hit by a node failure and lee's `finetune.sh` out of memory, each resubmitted as its owner.
+- `aio/lab-slurm.js`: Lab 1. sinfo/squeue/sacct/scontrol/sbatch/scancel with real option parsing; systemctl/journalctl on nodes; munge/unmunge. A failed job owned by another user (`dana` in practice) must be found, fixed and resubmitted as its owner (`su - dana -c "sbatch train.sh"`). Failure causes (all node failures): slurmd segfault, munge OOM-killed, or slurmd disabled after a reboot. (An out-of-memory job variant exists in the code but is switched off.)
 - `aio/lab-k8s.js`: Lab 2. `module load kubernetes`, kubectl get/describe/logs/apply/create/run/delete/wait, `--dry-run=client -o yaml`, strict field validation, pod lifecycle (ContainerCreating → Running/Completed, ImagePullBackOff for bad images).
 - `aio/lab-bcm.js`: Lab 3. cmsh with real-style prompts (`[headnode->device*[gpu004*]]%`), staged and committed changes, `add physicalnode NAME IP`, `cmsh -c`, and a text version of the `cm-kubernetes-setup` wizard with save-then-deploy (`-c FILE`).
 - `aio/exam-recall.js`: page controller (modes, timer, editor, report).

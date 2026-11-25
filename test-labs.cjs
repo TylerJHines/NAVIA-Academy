@@ -63,25 +63,10 @@ for (let seed = 1; seed <= 120; seed++) {
     run(`cm-kubernetes-setup -c ${P.cfgPath}`);
     allPass(t, 'bcm seed ' + seed); }
 }
-// practice scenarios: each Lab 1 variant, both users
-['node', 'oom'].forEach(v => ['root', 'student'].forEach(u => { const t = make('slurm', 1, 'practice', u, v); solveSlurm(t, u); allPass(t, `slurm practice ${v} ${u}`); }));
-function solveBoth(t, user) {
-  const P = t.P, M = P.oomJob, run = t.run, S = user === 'root' ? '' : 'sudo ';
-  run(`sacct ${user === 'root' ? '' : '-a '}-S today -s F,NF,TO,OOM -X -o JobID,User,State,NodeList`);
-  run(`sacct -j ${M.id} --format=JobID,State,ReqMem,MaxRSS,WorkDir`);
-  run(`ssh ${P.failNode} ${S}systemctl status slurmd`); run(`ssh ${P.failNode} ${S}systemctl restart slurmd`);
-  run(`scontrol update nodename=${P.failNode} state=resume`);
-  const a = run(`${S}su - ${P.owner} -c "sbatch ${P.script}"`).split(' ').pop();
-  const b = run(`${S}su - ${M.owner} -c "sbatch --mem=64G ${M.script}"`).split(' ').pop();
-  t.wait(40); run(`${S}cat /home/${P.owner}/slurm-${a}.out`); run(`${S}cat /home/${M.owner}/slurm-${b}.out`);
-  run(`scontrol update nodename=${P.drainNode} state=drain reason=maint`);
-}
-['root', 'student'].forEach(u => { const t = make('slurm', 1, 'practice', u, 'both'); solveBoth(t, u); allPass(t, `slurm practice both ${u}`); });
-{ const t = make('slurm', 1, 'practice', 'root', 'both'); t.run('sacct -S today -s NF -X'); assert(failed(t, 'find'), 'finding only one of the two failed jobs must not pass'); }
-{ const t = make('slurm', 1, 'practice', 'root', 'both'); solveBoth(t, 'root'); assert(t.lab.grade().results.length === 6, 'the both drill has six checks'); }
-{ const t = make('slurm', 1, 'practice', 'root', 'both'); const id = t.run('su - lee -c "sbatch finetune.sh"').split(' ').pop(); t.wait(40); t.run(`cat /home/lee/slurm-${id}.out`); assert(failed(t, 'submit2'), 'resubmitting the OOM job without more memory must fail'); }
-['root', 'student'].forEach(u => { const t = make('k8s', 1, 'practice', u); solveK8s(t); allPass(t, `k8s practice ${u}`); });
-
+// practice scenario, both users
+['root', 'student'].forEach(u => { const t = make('slurm', 1, 'practice', u); solveSlurm(t, u); allPass(t, `slurm practice ${u}`); });
+// Lab 1 is node failures only
+{ const causes = new Set(); for (let seed = 1; seed <= 200; seed++) causes.add(make('slurm', seed).P.cause); assert(!causes.has('oom') && causes.size === 3, 'exam Lab 1 must use only the three node-failure causes: ' + [...causes]); }
 /* ---- mistakes must be caught ---- */
 { const t = make('slurm', 5, 'exam', 'student'); t.run('sacct -S today -s F,NF,OOM'); assert(failed(t, 'find'), 'sacct without -a must not find the other user\'s job'); }
 { const t = make('slurm', 5); t.run('sacct -a -s NF,OOM'); assert(failed(t, 'find'), 'sacct --state without -S must not look back in time'); }
@@ -93,8 +78,6 @@ function solveBoth(t, user) {
   assert(!failed(t, 'drain'), 'draining a wrong node and resuming it must not fail the drain task (end state)'); }
 { const t = make('slurm', 1, 'practice'); t.run('ssh node002 systemctl restart slurmd'); t.run('scontrol update nodename=node002 state=resume');
   const id = t.run('sbatch /home/dana/train.sh').split(' ').pop(); t.wait(40); t.run(`cat slurm-${id}.out`); assert(failed(t, 'submit'), 'resubmitting as root instead of the owner must fail'); }
-{ const t = make('slurm', 1, 'practice', 'root', 'oom'); const id = t.run('su - dana -c "sbatch --mem=32G train.sh"').split(' ').pop(); t.wait(40);
-  assert(/OUT_OF_ME/.test(t.run(`sacct -j ${id} -X`)), 'too little memory must run out of memory again'); assert(failed(t, 'restore') && failed(t, 'submit'), 'an OOM resubmission must not pass'); }
 { const t = make('slurm', 1, 'practice'); assert(/invalid option -- 'd'/.test(t.run('su -dana -c whoami')), 'su -dana (no space) must fail like real su'); }
 { const t = make('k8s', 1, 'practice'); t.run('module load kubernetes'); t.run('kubectl create job training --image=busybox:1.36 -- sh -c "echo Training job complete"'); t.wait(10); assert(failed(t, 'jobrun'), 'an imperatively created Job must not satisfy "create from file"'); }
 { const t = make('k8s', 1, 'practice'); t.run('module load kubernetes'); t.run('cat <<EOF > /root/lab2/training-job.yaml'); ['apiVersion: batch/v1', 'kind: Job', 'metadata:', '  name: training', 'spec:', '  template:', '    spec:', '      containers:', '      - name: t', '        image: busybox:1.36', 'EOF'].forEach(t.run); const o = t.run('kubectl apply -f /root/lab2/training-job.yaml'); assert(/restartPolicy: Required value/.test(o), 'a Job without restartPolicy must be rejected'); }
@@ -131,9 +114,7 @@ accepts('slurm', ['sinfo', 'sinfo -N -l', 'sinfo -Nel', 'sinfo -l', 'sinfo -R', 
   'scontrol update NodeName=node002 State=RESUME', 'sinfo -N -n node002 -o "%N %T %E"', 'su - dana -c "whoami"', 'sudo -u dana whoami',
   'su - dana -c "sbatch train.sh"', 'squeue -j 5822', 'squeue -u dana', 'squeue -o "%.18i %.9P %.8j %.8u %.2t %.10M %.6D %R"', 'scontrol show jobid 5822', 'scontrol show job 5822', '#WAIT 30', 'tail -n 2 /home/dana/slurm-5822.out',
   'scontrol update NodeName=node001 Reason="maintenance" State=DRAIN', 'sinfo -N -n node001 -o "%N %T %E"', 'sinfo -O NodeList,StateLong,Reason']);
-accepts('slurm', ['sacct -a -S today -s OOM -X', 'sacct -j 5817 --format=JobID,State,ReqMem,MaxRSS,AveRSS,MaxVMSize,WorkDir', 'cat /home/dana/slurm-5817.out', 'grep SBATCH /home/dana/train.sh',
-  'su - dana -c "sbatch --mem=64G train.sh"', '#WAIT 30', 'sacct -u dana -S today --format=JobID,State,ReqMem,MaxRSS'], 'root', 'oom');
-accepts('slurm', ['ssh node002 journalctl -b -1 -u slurmd', 'ssh node002 journalctl --list-boots'], 'root', 'node');
+accepts('slurm', ['ssh node002 journalctl -b -1 -u slurmd', 'ssh node002 journalctl --list-boots', 'sacct -j 5817 --format=JobID,User,State,ReqMem,MaxRSS,WorkDir,SubmitLine']);
 accepts('k8s', ['module load kubernetes/default/1.32', 'kubectl cluster-info', 'kubectl get nodes -o wide', 'mkdir -p /root/lab2',
   'kubectl create job hello --image=busybox --dry-run=client -o yaml -- echo “hello from k8s” > /root/lab2/hello-job.yaml',
   'kubectl apply -f /root/lab2/hello-job.yaml', 'kubectl wait job/hello --for=condition=complete --timeout=60s', 'kubectl logs jobs/hello', 'kubectl logs -l job-name=hello',
