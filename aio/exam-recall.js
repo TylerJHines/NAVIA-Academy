@@ -226,7 +226,8 @@
     const pass = g ? Object.fromEntries(g.results.map(x => [x.id, x.pass])) : {};
     const ol = $('tasks'); ol.textContent = '';
     tasks.forEach(t => {
-      const li = document.createElement('li'); li.textContent = t.text;
+      const li = document.createElement('li');
+      t.text.split(/(\/(?:[\w.-]+\/)*[\w.-]*[\w-])/).forEach((part, i) => { if (i % 2) { const c = document.createElement('code'); c.className = 'path'; c.textContent = part; li.appendChild(c); } else if (part) li.appendChild(document.createTextNode(part)); });
       if (t.manifest) { const pre = document.createElement('pre'); pre.className = 'manifest'; pre.textContent = t.manifest; li.appendChild(pre); }
       if (pass[t.id] && mode === 'practice') li.className = 'done';
       ol.appendChild(li);

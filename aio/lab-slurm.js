@@ -976,8 +976,15 @@ echo "Job $SLURM_JOB_ID finished on $(hostname) at $(date)"
         if (cause === 'oom') return find.concat([`sacct -j ${base} --format=JobID,State,ReqMem,MaxRSS,WorkDir`, `${SUDO}cat ${ownerHome}/slurm-${base}.out`, `${SUDO}grep SBATCH ${ownerScript}`,
           `#  MaxRSS reached ReqMem (${reqMem}G) and the job loads ${dataGiB} GiB: ask for more memory on the command line`], submit, after);
         const fix = { crash: [`${SUDO}systemctl restart slurmd`], munge: [`${SUDO}systemctl status munge`, `${SUDO}systemctl start munge`, `${SUDO}systemctl restart slurmd`], stopped: [`${SUDO}systemctl enable --now slurmd`] }[cause];
+        // the other ways the node can fail (exam mode picks one of the three at random)
+        const other = {
+          crash: ['#  slurmd crashed (SEGV in the journal): a restart is enough', `#    ${SUDO}systemctl restart slurmd`],
+          munge: ['#  restart fails and the journal shows "Munge encode failed": munge is down', `#    ${SUDO}systemctl status munge`, `#    ${SUDO}systemctl start munge`, `#    ${SUDO}systemctl restart slurmd`, '#    munge -n | ssh headnode unmunge      (optional check: STATUS: Success)'],
+          stopped: ['#  slurmd is "inactive (dead)" and "disabled" after a reboot: start it and enable it', `#    ${SUDO}systemctl enable --now slurmd`]
+        };
+        const appendix = ['', '#  ---- The node can also fail in other ways (exam mode varies it) ----'].concat(...Object.keys(other).filter(k => k !== cause).map(k => other[k]));
         return find.concat([`scontrol show node ${failNode}`, `ssh ${failNode}`, `${SUDO}systemctl status slurmd`, `${SUDO}journalctl -u slurmd -n 30 --no-pager`],
-          fix, ['systemctl status slurmd', 'exit', `scontrol update nodename=${failNode} state=resume`, 'sinfo'], submit, after);
+          fix, ['systemctl status slurmd', 'exit', `scontrol update nodename=${failNode} state=resume`, 'sinfo'], submit, after, appendix);
       }
     };
     sh.lab = lab;

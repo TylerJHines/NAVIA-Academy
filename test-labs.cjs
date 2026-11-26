@@ -58,7 +58,7 @@ for (let seed = 1; seed <= 120; seed++) {
   { const t = make('bcm', seed), P = t.P, run = t.run;
     ['cmsh', 'softwareimage', `clone default-image ${P.image}`, 'commit', 'category', `clone default ${P.category}`, 'commit', `use ${P.category}`, `set softwareimage ${P.image}`, 'commit',
       'device', `add physicalnode ${P.node} ${P.ip}`, `set category ${P.category}`, `set mac ${P.mac.toLowerCase()}`, 'commit', `power on -n ${P.node}`, 'quit'].forEach(run);
-    run(`mkdir -p ${NL.dirname(P.cfgPath)}`); run('cm-kubernetes-setup');
+    run('cm-kubernetes-setup');
     ['1', '', '', '', '1', '2', '', '', 'y', '2', P.cfgPath].forEach(run);
     run(`cm-kubernetes-setup -c ${P.cfgPath}`);
     allPass(t, 'bcm seed ' + seed); }
@@ -99,6 +99,23 @@ for (let seed = 1; seed <= 120; seed++) {
   ['cm-kubernetes-setup', '1', '', '', '', '1', '2', '', '', 'y', '2', '', 'cm-kubernetes-setup -c /root/cm-kubernetes-setup.conf'].forEach(t.run);
   allPass(t, 'bcm recover with wizard uninstall');
   t.run('cm-kubernetes-setup --remove'); assert(failed(t, 'deploy'), '--remove must uninstall'); }
+
+/* ---- namespaces ---- */
+{ const t = make('k8s', 1, 'practice', 'root'); t.run('module load kubernetes');
+  assert(/namespace\/ml-team created/.test(t.run('kubectl create namespace ml-team')), 'root must be able to create a namespace');
+  assert(/pod\/web created/.test(t.run('kubectl run web --image=nginx:1.27 -n ml-team')), 'a Pod can be created in the new namespace');
+  t.wait(5); assert(/web/.test(t.run('kubectl get pods -n ml-team')) && !/web/.test(t.run('kubectl get pods')), 'the Pod lives only in its namespace');
+  assert(/nvidia-device-plugin/.test(t.run('kubectl get pods -n gpu-operator')), '-n gpu-operator lists its Pods'); }
+{ const t = make('k8s', 1, 'practice', 'student'); t.run('module load kubernetes');
+  assert(/User "student" cannot create/.test(t.run('kubectl create namespace ml-team')), 'student is refused with its own name');
+  assert(/created/.test(t.run('sudo kubectl create namespace ml-team')), 'sudo kubectl may create a namespace'); }
+{ const t = make('k8s', 1, 'practice', 'root'); t.run('module load kubernetes'); assert(!/student/.test(t.run('kubectl create ns team-a')), 'root must not be reported as student'); }
+{ const t = make('bcm', 1, 'practice');
+  ['cmsh -c "category; clone default gpu-training; commit"', 'cm-kubernetes-setup', '1', '', '', '', '1', '2', '', '', 'y', '2', '', 'cm-kubernetes-setup -c /root/cm-kubernetes-setup.conf', 'module load kubernetes'].forEach(t.run);
+  assert(/gpu-operator-[0-9a-f]{10}-/.test(t.run('kubectl get pods -n gpu-operator')), 'Lab 3: -n gpu-operator must list the GPU Operator Pods');
+  assert(/No resources found in default namespace/.test(t.run('kubectl get pods')), 'Lab 3: default namespace is empty');
+  assert(/gpu-operator/.test(t.run('kubectl get ns')), 'Lab 3: gpu-operator namespace exists'); }
+{ for (let seed = 1; seed <= 120; seed++) { const t = make('bcm', seed); if (t.lab.shell.isDir(NL.dirname(t.P.cfgPath))) continue; assert(false, 'Lab 3: the config folder must exist: ' + t.P.cfgPath); break; } }
 
 /* ---- command forms from a candidate's lab drill must all be accepted (one-liners and navigated) ---- */
 const BAD = /command not found|Unknown command|unrecognized|invalid option|Invalid (field|format|node|job)|Unable to|(?<!slurmstepd: )error:/i;

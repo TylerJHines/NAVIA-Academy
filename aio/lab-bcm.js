@@ -21,7 +21,7 @@
       node: NL.pick(r, ['gpu005', 'dgx007', 'gpu012', 'dgx003']), ip: `10.141.${NL.int(r, 0, 3)}.${NL.int(r, 50, 250)}`, mac: `FA:16:3E:${hx()}:${hx()}:${hx()}`,
       cfgPath: NL.pick(r, ['/root/cm-kubernetes-setup.conf', '/root/k8s-setup.conf', '/root/configs/kubernetes.conf']), seed: seed
     };
-    ['/cm', '/cm/images', '/cm/shared', '/cm/local'].forEach(d => sh.mkdirp(d));
+    ['/cm', '/cm/images', '/cm/shared', '/cm/local', NL.dirname(P.cfgPath)].forEach(d => sh.mkdirp(d));
     const t0 = sh.now();
 
     /* ---- objects: {data, stage (uncommitted copy or null), isNew, from} ---- */
@@ -539,7 +539,20 @@ modules:
       if (unknownCat.length) return fail(`Error: category ${unknownCat[0]} does not exist`);
       const unknownNode = c.controlPlane.concat(c.nodes).filter(x => !committed('device', x));
       if (unknownNode.length) return fail(`Error: node ${unknownNode[0]} does not exist`);
-      k8s = Object.assign({}, c, { configPath: path, method: method });
+      k8s = Object.assign({}, c, { configPath: path, method: method, deployedAt: sh.now() + 6 * 60e3 });
+      {
+        const sfx = n => NL.alnum(r, n), dnsHash = NL.hex(r, 10), all = k8sNodes(), workers = all.filter(n => !c.controlPlane.includes(n));
+        const sys = [['kube-system', `calico-kube-controllers-${NL.hex(r, 9)}-${sfx(5)}`, c.controlPlane[0], 'Running'], ['kube-system', `coredns-${dnsHash}-${sfx(5)}`, c.controlPlane[0], 'Running'], ['kube-system', `coredns-${dnsHash}-${sfx(5)}`, c.controlPlane[0], 'Running']]
+          .concat(all.map(n => ['kube-system', `calico-node-${sfx(5)}`, n, 'Running']), all.map(n => ['kube-system', `kube-proxy-${sfx(5)}`, n, 'Running']));
+        if (c.gpuOperator) {
+          sys.push(['gpu-operator', `gpu-operator-${NL.hex(r, 10)}-${sfx(5)}`, c.controlPlane[0], 'Running'], ['gpu-operator', `gpu-operator-node-feature-discovery-gc-${NL.hex(r, 9)}-${sfx(5)}`, c.controlPlane[0], 'Running'], ['gpu-operator', `gpu-operator-node-feature-discovery-master-${NL.hex(r, 9)}-${sfx(5)}`, c.controlPlane[0], 'Running']);
+          all.forEach(n => sys.push(['gpu-operator', `gpu-operator-node-feature-discovery-worker-${sfx(5)}`, n, 'Running']));
+          workers.forEach(n => ['gpu-feature-discovery', 'nvidia-container-toolkit-daemonset', 'nvidia-dcgm-exporter', 'nvidia-device-plugin-daemonset', 'nvidia-operator-validator'].forEach(x => sys.push(['gpu-operator', `${x}-${sfx(5)}`, n, 'Running'])));
+          workers.forEach(n => sys.push(['gpu-operator', `nvidia-cuda-validator-${sfx(5)}`, n, 'Completed']));
+        }
+        k8s.pods = sys.sort((a, b) => a[0] === b[0] ? (a[1] < b[1] ? -1 : 1) : (a[0] < b[0] ? -1 : 1));
+        k8s.namespaces = ['default', 'kube-node-lease', 'kube-public', 'kube-system'].concat(c.gpuOperator ? ['gpu-operator'] : []).sort();
+      }
       const stages = ['Search Pre Existing Kubernetes Installation', `Create Kubernetes Cluster ${c.name}`, 'Prepare Software Images', 'Install Packages', 'Create Kubernetes Configuration Overlays', 'Assign Kubernetes Roles', 'Configure Etcd Cluster', 'Configure Kubernetes Control Plane', 'Deploy Calico Network Plugin'].concat(c.gpuOperator ? ['Deploy NVIDIA GPU Operator'] : []).concat(['Wait For Nodes To Become Ready', 'Finalize Kubernetes Setup']);
       const lines = [`Executing ${stages.length * 3} stages`, `################### Starting execution for 'Kubernetes Setup'`, 'Connecting to CMDaemon', '- kubernetes'];
       stages.forEach((st, i) => { lines.push(`## Progress: ${Math.round(i * 100 / stages.length)}`, `#### stage: kubernetes: ${st}`); });
@@ -669,13 +682,34 @@ modules:
         }
         if (c === 'kubectl') {
           if (!moduleLoaded || !k8s) return fail('kubectl: command not found', 127);
-          if (argv[1] === 'cluster-info') return ok('Kubernetes control plane is running at https://10.141.255.254:10443\nCoreDNS is running at https://10.141.255.254:10443/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy\n\nTo further debug and diagnose cluster problems, use \'kubectl cluster-info dump\'.');
-          if (argv[1] === 'get' && /^(nodes?|no)$/.test(argv[2] || '')) {
-            const rows = k8sNodes().map(n => [n, 'Ready', k8s.controlPlane.includes(n) ? 'control-plane' : '<none>', '2m', 'v' + k8s.version + '.4']);
-            return ok(NL.table(['NAME', 'STATUS', 'ROLES', 'AGE', 'VERSION'], rows, { sep: '   ' }));
+          const a = argv.slice(1); let ns = 'default', all = false, wide = false; const pos = [];
+          for (let k = 0; k < a.length; k++) {
+            const x = a[k];
+            if (x === '-n' || x === '--namespace') ns = a[++k] || '';
+            else if (/^--namespace=/.test(x)) ns = x.slice(12);
+            else if (/^-n./.test(x)) ns = x.slice(2);
+            else if (x === '-A' || x === '--all-namespaces') all = true;
+            else if (x === '-o' && a[k + 1] === 'wide') { wide = true; k++; }
+            else if (x === '-owide' || x === '--output=wide' || x === '-o=wide') wide = true;
+            else if (!x.startsWith('-')) pos.push(x);
           }
-          if (argv[1] === 'get' && /^(pods?|po)$/.test(argv[2] || '')) return ok(argv.includes('-A') ? 'NAMESPACE      NAME                                       READY   STATUS    RESTARTS   AGE\nkube-system    calico-kube-controllers-7c9f5d6b8-x2mpl   1/1     Running   0          2m\nkube-system    coredns-76f75df574-8lwgk                  1/1     Running   0          2m' : 'No resources found in default namespace.');
-          return fail('This lab only simulates kubectl get nodes / get pods after deployment.');
+          const age = NL.age(Math.max(1000, sh.now() - k8s.deployedAt + 120e3));
+          if (pos[0] === 'cluster-info') return ok('Kubernetes control plane is running at https://10.141.255.254:10443\nCoreDNS is running at https://10.141.255.254:10443/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy\n\nTo further debug and diagnose cluster problems, use \'kubectl cluster-info dump\'.');
+          if (pos[0] !== 'get') return fail('This lab only simulates kubectl cluster-info and kubectl get nodes / pods / namespaces after deployment.');
+          const what = pos[1] || '';
+          if (/^(nodes?|no)$/.test(what)) {
+            const rows = k8sNodes().map(n => [n, 'Ready', k8s.controlPlane.includes(n) ? 'control-plane' : '<none>', age, 'v' + k8s.version + '.4'].concat(wide ? [n === 'headnode' ? '10.141.255.254' : view(store.device[n]).ip, '<none>', 'Ubuntu 22.04.4 LTS', '5.15.0-1063-nvidia', 'containerd://1.7.20'] : []));
+            return ok(NL.table(['NAME', 'STATUS', 'ROLES', 'AGE', 'VERSION'].concat(wide ? ['INTERNAL-IP', 'EXTERNAL-IP', 'OS-IMAGE', 'KERNEL-VERSION', 'CONTAINER-RUNTIME'] : []), rows, { sep: '   ' }));
+          }
+          if (/^(namespaces?|ns)$/.test(what)) return ok(NL.table(['NAME', 'STATUS', 'AGE'], k8s.namespaces.filter(n => !pos[2] || n === pos[2]).map(n => [n, 'Active', age]), { sep: '   ' }));
+          if (/^(pods?|po)$/.test(what)) {
+            const list = k8s.pods.filter(p => (all || p[0] === ns) && (!pos[2] || p[1] === pos[2]));
+            if (pos[2] && !list.length) return fail(`Error from server (NotFound): pods "${pos[2]}" not found`);
+            if (!list.length) return ok(all ? 'No resources found' : `No resources found in ${ns} namespace.`);
+            const hdr = (all ? ['NAMESPACE'] : []).concat(['NAME', 'READY', 'STATUS', 'RESTARTS', 'AGE']).concat(wide ? ['IP', 'NODE'] : []);
+            return ok(NL.table(hdr, list.map(p => (all ? [p[0]] : []).concat([p[1], p[3] === 'Completed' ? '0/1' : '1/1', p[3], '0', age]).concat(wide ? [`10.244.${(p[1].length * 7) % 250}.${(p[1].charCodeAt(p[1].length - 1) * 3) % 250}`, p[2]] : [])), { sep: '   ' }));
+          }
+          return fail(`error: the server doesn't have a resource type "${what}"`);
         }
         return undefined;
       },
@@ -723,8 +757,7 @@ modules:
       solution() {
         const dir = NL.dirname(P.cfgPath);
         return ['cmsh', 'softwareimage', `clone default-image ${P.image}`, 'commit', 'category', `clone default ${P.category}`, 'commit', `use ${P.category}`, `set softwareimage ${P.image}`, 'commit', 'device', `add physicalnode ${P.node} ${P.ip}`, `set category ${P.category}`, `set mac ${P.mac}`, 'commit', `power on -n ${P.node}`, `status -n ${P.node}`, 'quit']
-          .concat(dir !== '/root' ? [`mkdir -p ${dir}`] : [])
-          .concat(['cm-kubernetes-setup', '#  Deploy → version → name → accept networks → control plane: headnode', `#  worker categories: ${P.category} → Enter → Enter → GPU Operator: y → "Save config & exit"`, `#  save to ${P.cfgPath}`, `cm-kubernetes-setup -c ${P.cfgPath}`, 'module load kubernetes', 'kubectl get nodes']);
+          .concat(['cm-kubernetes-setup', '#  Deploy → version → name → accept networks → control plane: headnode', `#  worker categories: ${P.category} → Enter → Enter → GPU Operator: y → "Save config & exit"`, `#  save to ${P.cfgPath}`, `cm-kubernetes-setup -c ${P.cfgPath}`, 'module load kubernetes', 'kubectl get nodes', 'kubectl get pods -A      # optional: the GPU Operator Pods are Running']);
       }
     };
     sh.lab = lab;

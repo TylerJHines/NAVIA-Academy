@@ -65,7 +65,16 @@
     const t0 = sh.now();
 
     let moduleLoaded = false;
-    const pods = {}, jobs = {}, deps = {};
+    /* objects live in namespaces; pods/jobs/deps point at the namespace the current kubectl command uses */
+    const NSS = {};
+    const SYSTEM_NS = ['kube-system', 'kube-public', 'kube-node-lease', 'gpu-operator'];
+    const mkNs = (n, t) => { NSS[n] = { pods: {}, jobs: {}, deps: {}, created: t }; };
+    ['default'].concat(SYSTEM_NS).forEach(n => mkNs(n, t0 - 12 * 86400e3));
+    let curNs = 'default', cmdNs = 'default', cmdNsExplicit = false;
+    let pods = NSS.default.pods, jobs = NSS.default.jobs, deps = NSS.default.deps;
+    const useNs = n => { const st = NSS[n] || { pods: {}, jobs: {}, deps: {} }; curNs = n; pods = st.pods; jobs = st.jobs; deps = st.deps; };
+    const allObjs = kind => Object.values(NSS).flatMap(st => Object.values(st[kind]));
+    const podsOf = o => (NSS[o.ns] || { pods: {} }).pods;
     const ev = { nodesShown: false, logsShown: false, verify: false };
     let lastJobLogs = null;
     let podSeq = 10;
@@ -95,7 +104,7 @@
       return { st: 'Completed', ready: '0/1', restarts: 0, done: true, finished: p.created + 2500 + rt, started: p.created + 2500 };
     }
     function jobStatus(j) {
-      const p = pods[j.podName];
+      const p = podsOf(j)[j.podName];
       if (!p) return { st: 'Running', comp: '0/1', dur: NL.age(sh.now() - j.created) };
       const s = pstatus(p);
       if (s.done) return { st: 'Complete', comp: '1/1', dur: NL.age(s.finished - j.created), done: true };
@@ -175,7 +184,7 @@
       }
       if (unknown.length) return { err: `Error from server (BadRequest): error when creating "${where}": ${kind} in version "${doc.apiVersion.replace(/^.*\//, '')}" cannot be handled as a ${kind}: strict decoding error: ${unknown.join(', ')}` };
       const ns = doc.metadata && doc.metadata.namespace;
-      if (ns && ns !== 'default') return { err: `Error from server (NotFound): error when creating "${where}": namespaces "${ns}" not found` };
+      if (ns && !NSS[ns]) return { err: `Error from server (NotFound): error when creating "${where}": namespaces "${ns}" not found` };
       const errs = [];
       if (!name) errs.push('metadata.name: Required value: name or generateName is required');
       else if (!RFC1123.test(String(name))) errs.push(`metadata.name: Invalid value: "${name}": a lowercase RFC 1123 subdomain must consist of lower case alphanumeric characters, '-' or '.', and must start and end with an alphanumeric character (e.g. 'example.com', regex used for validation is '[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*')`);
@@ -203,7 +212,7 @@
     const newIp = () => `10.244.${NL.int(r, 1, 2)}.${NL.int(r, 10, 250)}`;
     function makePod(name, spec, labels, source, owner) {
       const node = NODES[1 + (podSeq++ % 2)][0];
-      pods[name] = { name: name, spec: JSON.parse(JSON.stringify(spec)), labels: labels || {}, created: sh.now(), source: source, owner: owner || null, node: node, ip: newIp(), uid: NL.hex(r, 8) };
+      pods[name] = { ns: curNs, name: name, spec: JSON.parse(JSON.stringify(spec)), labels: labels || {}, created: sh.now(), source: source, owner: owner || null, node: node, ip: newIp(), uid: NL.hex(r, 8) };
       return pods[name];
     }
     function applyDoc(v, how, src) {
@@ -230,11 +239,11 @@
       if (kind === 'Pod') { const p = makePod(name, doc.spec, doc.metadata.labels, source); p.specStr = specStr; p.doc = doc; }
       else if (kind === 'Job') {
         const podName = `${name}-${NL.alnum(r, 5)}`;
-        jobs[name] = { name: name, doc: doc, specStr: specStr, created: sh.now(), source: source, podName: podName };
+        jobs[name] = { ns: curNs, name: name, doc: doc, specStr: specStr, created: sh.now(), source: source, podName: podName };
         makePod(podName, doc.spec.template.spec, Object.assign({ 'batch.kubernetes.io/job-name': name, 'job-name': name }, (doc.spec.template.metadata || {}).labels), source, { kind: 'Job', name: name });
       } else {
         const hash = NL.hex(r, 10), reps = doc.spec.replicas == null ? 1 : doc.spec.replicas;
-        deps[name] = { name: name, doc: doc, specStr: specStr, created: sh.now(), source: source, hash: hash, pods: [] };
+        deps[name] = { ns: curNs, name: name, doc: doc, specStr: specStr, created: sh.now(), source: source, hash: hash, pods: [] };
         for (let i = 0; i < reps; i++) { const pn = `${name}-${hash}-${NL.alnum(r, 5)}`; makePod(pn, doc.spec.template.spec, doc.spec.template.metadata.labels, source, { kind: 'ReplicaSet', name: `${name}-${hash}` }); deps[name].pods.push(pn); }
       }
       return ok(`${res}/${name} created`);
@@ -255,9 +264,14 @@
       if (!docs.length) return fail(`error: no objects passed to ${how}`);
       const outs = [], errs = [];
       for (const d of docs) {
+        if (isObj(d) && d.kind === 'Namespace' && d.apiVersion === 'v1') { const r2 = createNs(isObj(d.metadata) ? d.metadata.name : '', how, cmdCtx); if (r2.out) outs.push(r2.out); if (r2.err) errs.push(r2.err); continue; }
         const v = validate(d, src);
         if (v.err) { errs.push(v.err.startsWith('The ') ? `Error from server (Invalid): error when creating "${src === '-' ? 'STDIN' : src}": ${v.err}` : v.err); continue; }
+        const docNs = d.metadata.namespace;
+        if (cmdNsExplicit && docNs && docNs !== cmdNs) { errs.push(`error: the namespace from the provided object "${docNs}" does not match the namespace "${cmdNs}". You must pass '--namespace=${docNs}' to perform this operation.`); continue; }
+        useNs(docNs || cmdNs);
         const r2 = applyDoc(v, how, src === '-' ? '-' : sh.resolve(src));
+        useNs(cmdNs);
         if (r2.out) outs.push(r2.out); if (r2.err) errs.push(r2.err);
       }
       return { out: outs.join('\n'), err: errs.join('\n'), code: errs.length ? 1 : 0 };
@@ -304,7 +318,7 @@
     /* ---- kubectl get ---- */
     function nsOf(f) { return f.A || f['all-namespaces'] ? '*' : (f.n || f.namespace || 'default'); }
     function podRows(list) {
-      return list.map(p => { const s = pstatus(p); return { name: p.name, ready: s.ready, st: s.st, rs: String(s.restarts) + (s.restarts ? ` (${NL.age(Math.max(1000, (sh.now() - p.created) % 12000))} ago)` : ''), age: NL.age(sh.now() - p.created), ip: s.st === 'ContainerCreating' ? '<none>' : p.ip, node: p.node }; });
+      return list.map(p => { const s = pstatus(p); return { ns: p.ns, name: p.name, ready: s.ready, st: s.st, rs: String(s.restarts) + (s.restarts ? ` (${NL.age(Math.max(1000, (sh.now() - p.created) % 12000))} ago)` : ''), age: NL.age(sh.now() - p.created), ip: s.st === 'ContainerCreating' ? '<none>' : p.ip, node: p.node }; });
     }
     const PREFIX = { pods: 'pod/', jobs: 'job.batch/', deployments: 'deployment.apps/', nodes: 'node/', services: 'service/', replicasets: 'replicaset.apps/', namespaces: 'namespace/' };
     function retable(lines, prefix, nsCols) {
@@ -372,49 +386,54 @@
         const rows = list.map(n => [n[0], 'Ready', n[1], '12d', 'v1.30.4'].concat(wide ? [n[2], '<none>', 'Ubuntu 22.04.4 LTS', '5.15.0-1063-nvidia', 'containerd://1.7.20'] : []));
         return ok(noHead ? NL.table(hdr, rows, { sep: '   ' }).split('\n').slice(1).join('\n') : NL.table(hdr, rows, { sep: '   ' }));
       }
-      if (k === 'namespaces') return ok(NL.table(['NAME', 'STATUS', 'AGE'], [['default', 'Active', '12d'], ['gpu-operator', 'Active', '12d'], ['kube-node-lease', 'Active', '12d'], ['kube-public', 'Active', '12d'], ['kube-system', 'Active', '12d']], { sep: '   ' }));
-      if (ns !== 'default' && ns !== '*' && !['kube-system', 'gpu-operator', 'kube-public', 'kube-node-lease'].includes(ns)) return emptyMsg();
-      const userNs = ns === 'default' || all;
+      if (k === 'namespaces') {
+        const names = Object.keys(NSS).sort().filter(n => !target || n === target);
+        if (target && !names.length) return fail(`Error from server (NotFound): namespaces "${target}" not found`);
+        if (o === 'name') return ok(names.map(n => 'namespace/' + n).join('\n'));
+        return ok(NL.table(['NAME', 'STATUS', 'AGE'], names.map(n => [n, 'Active', NL.age(sh.now() - NSS[n].created)]), { sep: '   ' }));
+      }
+      if (ns !== '*' && !NSS[ns]) return emptyMsg();
       if (k === 'pods' || k === 'all') {
-        let list = userNs ? Object.values(pods).filter(p => !target || p.name === target).sort((a, b) => a.name < b.name ? -1 : 1) : [];
+        let list = (all ? allObjs('pods') : Object.values(pods)).filter(p => !target || p.name === target).sort((a, b) => a.name < b.name ? -1 : 1);
         const sysList = SYS.filter(([n, sn]) => (all || sn === ns) && (!target || n === target));
         if (target && !list.length && k === 'pods' && !sysList.length) return fail(`Error from server (NotFound): pods "${target}" not found`);
         if (f.l || f.selector) { const sel = (f.l || f.selector).split(',').map(x => x.split('=')); list = list.filter(p => sel.every(([a, b]) => p.labels[a] === b)); }
         if (target && (o === 'yaml' || o === 'json')) {
           const p = list[0], s = pstatus(p);
-          const obj = { apiVersion: 'v1', kind: 'Pod', metadata: { creationTimestamp: NL.isoTime(p.created) + 'Z', labels: p.labels, name: p.name, namespace: 'default', uid: p.uid + '-1f2e-4c3b-9a8d-' + NL.hex(r, 12) }, spec: Object.assign({}, p.spec, { nodeName: p.node }), status: { phase: s.st === 'Running' ? 'Running' : s.done ? 'Succeeded' : 'Pending', podIP: p.ip, hostIP: NODES.find(n => n[0] === p.node)[2] } };
+          const obj = { apiVersion: 'v1', kind: 'Pod', metadata: { creationTimestamp: NL.isoTime(p.created) + 'Z', labels: p.labels, name: p.name, namespace: p.ns, uid: p.uid + '-1f2e-4c3b-9a8d-' + NL.hex(r, 12) }, spec: Object.assign({}, p.spec, { nodeName: p.node }), status: { phase: s.st === 'Running' ? 'Running' : s.done ? 'Succeeded' : 'Pending', podIP: p.ip, hostIP: NODES.find(n => n[0] === p.node)[2] } };
           return ok(o === 'json' ? JSON.stringify(obj, null, 4) : NL.yaml.dump(obj));
         }
         if (o === 'name') return ok(list.map(p => 'pod/' + p.name).join('\n'));
-        let rowsData = podRows(list).map(x => (all ? ['default'] : []).concat([(k === 'all' ? 'pod/' : '') + x.name, x.ready, x.st, x.rs, x.age]).concat(wide ? [x.ip, x.node, '<none>', '<none>'] : []));
-        if (k === 'pods' && (all || !userNs)) rowsData = sysList.map(([n, sn]) => (all ? [sn] : []).concat([n, '1/1', 'Running', '0', '12d']).concat(wide ? ['10.244.0.' + (n.length % 200), 'node00' + (1 + n.length % 3), '<none>', '<none>'] : [])).concat(rowsData);
+        let rowsData = podRows(list).map(x => (all ? [x.ns] : []).concat([(k === 'all' ? 'pod/' : '') + x.name, x.ready, x.st, x.rs, x.age]).concat(wide ? [x.ip, x.node, '<none>', '<none>'] : []));
+        if (k === 'pods') rowsData = sysList.map(([n, sn]) => (all ? [sn] : []).concat([n, '1/1', 'Running', '0', '12d']).concat(wide ? ['10.244.0.' + (n.length % 200), 'node00' + (1 + n.length % 3), '<none>', '<none>'] : [])).concat(rowsData);
+        if (all) rowsData.sort((a, b) => a[0] === b[0] ? (a[1] < b[1] ? -1 : 1) : (a[0] < b[0] ? -1 : 1)); // -A lists by namespace, then name
         const hdr = nsCol.concat(['NAME', 'READY', 'STATUS', 'RESTARTS', 'AGE']).concat(wide ? ['IP', 'NODE', 'NOMINATED NODE', 'READINESS GATES'] : []);
         if (k === 'pods') { if (!rowsData.length) return emptyMsg(); const t = NL.table(hdr, rowsData, { sep: '   ' }); return ok(noHead ? t.split('\n').slice(1).join('\n') : t); }
         // all
         const sections = [];
         if (rowsData.length) sections.push(NL.table(hdr, rowsData, { sep: '   ' }));
-        if (userNs) sections.push(NL.table(nsCol.concat(['NAME', 'TYPE', 'CLUSTER-IP', 'EXTERNAL-IP', 'PORT(S)', 'AGE']), [(all ? ['default'] : []).concat(['service/kubernetes', 'ClusterIP', '10.150.0.1', '<none>', '443/TCP', '12d'])], { sep: '   ' }));
-        const dl = userNs ? Object.values(deps) : [];
-        if (dl.length) sections.push(NL.table(nsCol.concat(['NAME', 'READY', 'UP-TO-DATE', 'AVAILABLE', 'AGE']), dl.map(d => { const ready = d.pods.filter(n => pods[n] && pstatus(pods[n]).st === 'Running').length; return (all ? ['default'] : []).concat([`deployment.apps/${d.name}`, `${ready}/${d.pods.length}`, String(d.pods.length), String(ready), NL.age(sh.now() - d.created)]); }), { sep: '   ' }));
-        if (dl.length) sections.push(NL.table(nsCol.concat(['NAME', 'DESIRED', 'CURRENT', 'READY', 'AGE']), dl.map(d => (all ? ['default'] : []).concat([`replicaset.apps/${d.name}-${d.hash}`, String(d.pods.length), String(d.pods.length), String(d.pods.filter(n => pods[n] && pstatus(pods[n]).st === 'Running').length), NL.age(sh.now() - d.created)])), { sep: '   ' }));
-        const jl = userNs ? Object.values(jobs) : [];
-        if (jl.length) sections.push(NL.table(nsCol.concat(['NAME', 'STATUS', 'COMPLETIONS', 'DURATION', 'AGE']), jl.map(j => { const s = jobStatus(j); return (all ? ['default'] : []).concat([`job.batch/${j.name}`, s.st, s.comp, s.dur, NL.age(sh.now() - j.created)]); }), { sep: '   ' }));
+        if (all || ns === 'default') sections.push(NL.table(nsCol.concat(['NAME', 'TYPE', 'CLUSTER-IP', 'EXTERNAL-IP', 'PORT(S)', 'AGE']), [(all ? ['default'] : []).concat(['service/kubernetes', 'ClusterIP', '10.150.0.1', '<none>', '443/TCP', '12d'])], { sep: '   ' }));
+        const dl = all ? allObjs('deps') : Object.values(deps);
+        if (dl.length) sections.push(NL.table(nsCol.concat(['NAME', 'READY', 'UP-TO-DATE', 'AVAILABLE', 'AGE']), dl.map(d => { const ready = d.pods.filter(n => podsOf(d)[n] && pstatus(podsOf(d)[n]).st === 'Running').length; return (all ? [d.ns] : []).concat([`deployment.apps/${d.name}`, `${ready}/${d.pods.length}`, String(d.pods.length), String(ready), NL.age(sh.now() - d.created)]); }), { sep: '   ' }));
+        if (dl.length) sections.push(NL.table(nsCol.concat(['NAME', 'DESIRED', 'CURRENT', 'READY', 'AGE']), dl.map(d => (all ? [d.ns] : []).concat([`replicaset.apps/${d.name}-${d.hash}`, String(d.pods.length), String(d.pods.length), String(d.pods.filter(n => podsOf(d)[n] && pstatus(podsOf(d)[n]).st === 'Running').length), NL.age(sh.now() - d.created)])), { sep: '   ' }));
+        const jl = all ? allObjs('jobs') : Object.values(jobs);
+        if (jl.length) sections.push(NL.table(nsCol.concat(['NAME', 'STATUS', 'COMPLETIONS', 'DURATION', 'AGE']), jl.map(j => { const s = jobStatus(j); return (all ? [j.ns] : []).concat([`job.batch/${j.name}`, s.st, s.comp, s.dur, NL.age(sh.now() - j.created)]); }), { sep: '   ' }));
         return ok(sections.join('\n\n'));
       }
       if (k === 'jobs') {
-        const list = userNs ? Object.values(jobs).filter(j => !target || j.name === target) : [];
+        const list = (all ? allObjs('jobs') : Object.values(jobs)).filter(j => !target || j.name === target);
         if (target && !list.length) return fail(`Error from server (NotFound): jobs.batch "${target}" not found`);
         if (o === 'name') return ok(list.map(j => 'job.batch/' + j.name).join('\n'));
         if (target && (o === 'yaml' || o === 'json')) { const j = list[0]; const obj = Object.assign({}, j.doc, { status: jobStatus(j).done ? { succeeded: 1, completionTime: NL.isoTime(sh.now()) + 'Z' } : { active: 1 } }); return ok(o === 'json' ? JSON.stringify(obj, null, 4) : NL.yaml.dump(obj)); }
         if (!list.length) return emptyMsg();
         const hdr = nsCol.concat(['NAME', 'STATUS', 'COMPLETIONS', 'DURATION', 'AGE']).concat(wide ? ['CONTAINERS', 'IMAGES', 'SELECTOR'] : []);
-        return ok(NL.table(hdr, list.map(j => { const s = jobStatus(j); const c = j.doc.spec.template.spec.containers[0]; return (all ? ['default'] : []).concat([j.name, s.st, s.comp, s.dur, NL.age(sh.now() - j.created)]).concat(wide ? [c.name, c.image, `batch.kubernetes.io/controller-uid=${NL.hex(r, 8)}`] : []); }), { sep: '   ' }));
+        return ok(NL.table(hdr, list.map(j => { const s = jobStatus(j); const c = j.doc.spec.template.spec.containers[0]; return (all ? [j.ns] : []).concat([j.name, s.st, s.comp, s.dur, NL.age(sh.now() - j.created)]).concat(wide ? [c.name, c.image, `batch.kubernetes.io/controller-uid=${NL.hex(r, 8)}`] : []); }), { sep: '   ' }));
       }
       if (k === 'deployments') {
-        const list = userNs ? Object.values(deps).filter(d => !target || d.name === target) : [];
+        const list = (all ? allObjs('deps') : Object.values(deps)).filter(d => !target || d.name === target);
         if (target && !list.length) return fail(`Error from server (NotFound): deployments.apps "${target}" not found`);
         if (!list.length) return emptyMsg();
-        return ok(NL.table(nsCol.concat(['NAME', 'READY', 'UP-TO-DATE', 'AVAILABLE', 'AGE']), list.map(d => { const ready = d.pods.filter(n => pods[n] && pstatus(pods[n]).st === 'Running').length; return (all ? ['default'] : []).concat([d.name, `${ready}/${d.pods.length}`, String(d.pods.length), String(ready), NL.age(sh.now() - d.created)]); }), { sep: '   ' }));
+        return ok(NL.table(nsCol.concat(['NAME', 'READY', 'UP-TO-DATE', 'AVAILABLE', 'AGE']), list.map(d => { const ready = d.pods.filter(n => podsOf(d)[n] && pstatus(podsOf(d)[n]).st === 'Running').length; return (all ? [d.ns] : []).concat([d.name, `${ready}/${d.pods.length}`, String(d.pods.length), String(ready), NL.age(sh.now() - d.created)]); }), { sep: '   ' }));
       }
       if (k === 'services') return ok(NL.table(['NAME', 'TYPE', 'CLUSTER-IP', 'EXTERNAL-IP', 'PORT(S)', 'AGE'], [['kubernetes', 'ClusterIP', '10.150.0.1', '<none>', '443/TCP', '12d']], { sep: '   ' }));
       if (k === 'replicasets') { const dl = Object.values(deps); if (!dl.length) return emptyMsg(); return ok(NL.table(['NAME', 'DESIRED', 'CURRENT', 'READY', 'AGE'], dl.map(d => [`${d.name}-${d.hash}`, String(d.pods.length), String(d.pods.length), String(d.pods.length), NL.age(sh.now() - d.created)]), { sep: '   ' })); }
@@ -423,7 +442,7 @@
     }
     function podEvents(p) {
       const c = ctrOf(p), s = pstatus(p), age = sh.now() - p.created, a = ms => NL.age(Math.max(0, age - ms));
-      const ev2 = [['Normal', 'Scheduled', a(0), 'default-scheduler', `Successfully assigned default/${p.name} to ${p.node}`]];
+      const ev2 = [['Normal', 'Scheduled', a(0), 'default-scheduler', `Successfully assigned ${p.ns}/${p.name} to ${p.node}`]];
       if (s.bad) {
         ev2.push(['Normal', 'Pulling', a(500), 'kubelet', `Pulling image "${c.image}"`]);
         if (age > 2500) ev2.push(['Warning', 'Failed', a(2500), 'kubelet', `Failed to pull image "${c.image}": rpc error: code = NotFound desc = failed to pull and unpack image "${fullRef(c.image)}": failed to resolve reference "${fullRef(c.image)}": ${fullRef(c.image)}: not found`], ['Warning', 'Failed', a(2500), 'kubelet', 'Error: ErrImagePull'], ['Normal', 'BackOff', a(4000), 'kubelet', `Back-off pulling image "${c.image}"`], ['Warning', 'Failed', a(4000), 'kubelet', 'Error: ImagePullBackOff']);
@@ -453,7 +472,7 @@
           const c = ctrOf(p), s = pstatus(p);
           const state = s.st === 'Running' ? `Running\n      Started:      ${kTime(s.started)}` : s.done ? `Terminated\n      Reason:       Completed\n      Exit Code:    0` : s.crash ? `Waiting\n      Reason:       CrashLoopBackOff\n    Last State:     Terminated\n      Reason:       Completed\n      Exit Code:    0` : `Waiting\n      Reason:       ${s.st}`;
           const evs = podEvents(p);
-          return [`Name:             ${p.name}`, 'Namespace:        default', 'Priority:         0', 'Service Account:  default', `Node:             ${p.node}/${NODES.find(n => n[0] === p.node)[2]}`, `Start Time:       ${kTime(p.created)}`,
+          return [`Name:             ${p.name}`, `Namespace:        ${p.ns}`, 'Priority:         0', 'Service Account:  default', `Node:             ${p.node}/${NODES.find(n => n[0] === p.node)[2]}`, `Start Time:       ${kTime(p.created)}`,
             `Labels:           ${Object.entries(p.labels).map(([a, b]) => a + '=' + b).join('\n                  ') || '<none>'}`, 'Annotations:      <none>', `Status:           ${s.st === 'Running' ? 'Running' : s.done ? 'Succeeded' : 'Pending'}`, `IP:               ${s.st === 'ContainerCreating' ? '' : p.ip}`,
             p.owner ? `Controlled By:    ${p.owner.kind}/${p.owner.name}` : null, 'Containers:', `  ${c.name}:`, `    Image:          ${c.image}`,
             c.command ? `    Command:\n${c.command.map(x => '      ' + x).join('\n')}` : null, c.args ? `    Args:\n${c.args.map(x => '      ' + x).join('\n')}` : null,
@@ -465,9 +484,9 @@
       if (k === 'jobs') {
         const j = jobs[target]; if (!j) return fail(`Error from server (NotFound): jobs.batch "${target || ''}" not found`);
         const s = jobStatus(j), c = j.doc.spec.template.spec.containers[0];
-        return ok([`Name:             ${j.name}`, 'Namespace:        default', `Completions:      1`, `Parallelism:      1`, `Start Time:       ${kTime(j.created)}`, s.done ? `Completed At:     ${kTime(sh.now())}` : null, `Pods Statuses:    ${s.done ? '0 Active (0 Ready) / 1 Succeeded / 0 Failed' : '1 Active (0 Ready) / 0 Succeeded / 0 Failed'}`, 'Pod Template:', '  Containers:', `   ${c.name}:`, `    Image:      ${c.image}`, c.command ? `    Command:\n${c.command.map(x => '      ' + x).join('\n')}` : null, 'Events:', '  Type    Reason            Age   From            Message', '  ----    ------            ----  ----            -------', `  Normal  SuccessfulCreate  ${NL.age(sh.now() - j.created)}   job-controller  Created pod: ${j.podName}`, s.done ? `  Normal  Completed         1s    job-controller  Job completed` : null].filter(x => x !== null).join('\n'));
+        return ok([`Name:             ${j.name}`, `Namespace:        ${j.ns}`, `Completions:      1`, `Parallelism:      1`, `Start Time:       ${kTime(j.created)}`, s.done ? `Completed At:     ${kTime(sh.now())}` : null, `Pods Statuses:    ${s.done ? '0 Active (0 Ready) / 1 Succeeded / 0 Failed' : '1 Active (0 Ready) / 0 Succeeded / 0 Failed'}`, 'Pod Template:', '  Containers:', `   ${c.name}:`, `    Image:      ${c.image}`, c.command ? `    Command:\n${c.command.map(x => '      ' + x).join('\n')}` : null, 'Events:', '  Type    Reason            Age   From            Message', '  ----    ------            ----  ----            -------', `  Normal  SuccessfulCreate  ${NL.age(sh.now() - j.created)}   job-controller  Created pod: ${j.podName}`, s.done ? `  Normal  Completed         1s    job-controller  Job completed` : null].filter(x => x !== null).join('\n'));
       }
-      if (k === 'deployments') { const d = deps[target]; if (!d) return fail(`Error from server (NotFound): deployments.apps "${target || ''}" not found`); return ok(`Name:                   ${d.name}\nNamespace:              default\nReplicas:               ${d.pods.length} desired | ${d.pods.length} updated | ${d.pods.length} total\nPod Template:\n  Containers:\n   ${d.doc.spec.template.spec.containers[0].name}:\n    Image:        ${d.doc.spec.template.spec.containers[0].image}`); }
+      if (k === 'deployments') { const d = deps[target]; if (!d) return fail(`Error from server (NotFound): deployments.apps "${target || ''}" not found`); return ok(`Name:                   ${d.name}\nNamespace:              ${d.ns}\nReplicas:               ${d.pods.length} desired | ${d.pods.length} updated | ${d.pods.length} total\nPod Template:\n  Containers:\n   ${d.doc.spec.template.spec.containers[0].name}:\n    Image:        ${d.doc.spec.template.spec.containers[0].image}`); }
       return fail(`error: the server doesn't have a resource type "${f._[0]}"`);
     }
     function logs(f) {
@@ -491,8 +510,8 @@
       let p;
       if (t.includes('/')) {
         const [a, b] = t.split('/'); const k = RES[a];
-        if (k === 'jobs') { const j = jobs[b]; if (!j) return fail(`error: error from server (NotFound): jobs.batch "${b}" not found in namespace "default"`); p = pods[j.podName]; }
-        else if (k === 'deployments') { const d = deps[b]; if (!d) return fail(`error: error from server (NotFound): deployments.apps "${b}" not found in namespace "default"`); p = pods[d.pods[0]]; }
+        if (k === 'jobs') { const j = jobs[b]; if (!j) return fail(`error: error from server (NotFound): jobs.batch "${b}" not found in namespace "${curNs}"`); p = pods[j.podName]; }
+        else if (k === 'deployments') { const d = deps[b]; if (!d) return fail(`error: error from server (NotFound): deployments.apps "${b}" not found in namespace "${curNs}"`); p = pods[d.pods[0]]; }
         else if (k === 'pods') { p = pods[b]; if (!p) return fail(`Error from server (NotFound): pods "${b}" not found`); }
         else return fail(`error: cannot get the logs from ${a}: selector for ${a} not implemented`);
       } else {
@@ -532,6 +551,16 @@
       if (o === 'json') return ok(JSON.stringify(man, null, 4));
       return ok(`${ref} created (dry run)`);
     }
+    let cmdCtx = null;
+    const isAdmin = ctx => sh.user === 'root' || (ctx && ctx.sudo);
+    function createNs(name, how, ctx) {
+      if (!isAdmin(ctx)) return fail(`Error from server (Forbidden): namespaces is forbidden: User "${sh.user}" cannot create resource "namespaces" in API group "" at the cluster scope`);
+      if (!name) return fail('error: exactly one NAME is required, got 0');
+      if (!LABEL.test(name) || name.length > 63) return fail(`The Namespace "${name}" is invalid: metadata.name: Invalid value: "${name}": a lowercase RFC 1123 label must consist of lower case alphanumeric characters or '-', and must start and end with an alphanumeric character (e.g. 'my-name',  or '123-abc', regex used for validation is '[a-z0-9]([-a-z0-9]*[a-z0-9])?')`);
+      if (NSS[name]) return how === 'apply' ? ok(`namespace/${name} unchanged`) : fail(`Error from server (AlreadyExists): namespaces "${name}" already exists`);
+      mkNs(name, sh.now());
+      return ok(`namespace/${name} created`);
+    }
     function kcreate(f, stdin) {
       if (f.f || f.filename) return fromFile(f.f || f.filename, 'create', stdin);
       const what = f._[0], name = f._[1];
@@ -549,7 +578,10 @@
         if (f['dry-run']) return dry(f, man, 'deployment.apps/' + name);
         return applyDoc({ kind: 'Deployment', name: name, doc: man }, 'create-imperative', null);
       }
-      if (what === 'namespace' || what === 'ns') return fail('Error from server (Forbidden): namespaces is forbidden: User "student" cannot create resource "namespaces" in API group "" at the cluster scope');
+      if (what === 'namespace' || what === 'ns') {
+        if (f['dry-run']) return dry(f, { apiVersion: 'v1', kind: 'Namespace', metadata: { creationTimestamp: null, name: name }, spec: {}, status: {} }, 'namespace/' + name);
+        return createNs(name, 'create', cmdCtx);
+      }
       return fail(what ? `error: unknown command "${what}" for "kubectl create"` : 'error: must specify one of -f and -k');
     }
     function del(f) {
@@ -571,8 +603,14 @@
       return { out: outs.join('\n'), err: errs.join('\n'), code: errs.length ? 1 : 0 };
     }
     function delOne(k, n) {
-      if (k === 'pods') { if (!pods[n]) return fail(`Error from server (NotFound): pods "${n}" not found`); delete pods[n]; if (n === P.podName || n === P.runName) ev.verify = false; return ok(`pod "${n}" deleted`); }
+      if (k === 'pods') { if (!pods[n]) return fail(`Error from server (NotFound): pods "${n}" not found`); delete pods[n]; if (curNs === 'default' && (n === P.podName || n === P.runName)) ev.verify = false; return ok(`pod "${n}" deleted`); }
       if (k === 'jobs') { const j = jobs[n]; if (!j) return fail(`Error from server (NotFound): jobs.batch "${n}" not found`); delete pods[j.podName]; delete jobs[n]; return ok(`job.batch "${n}" deleted`); }
+      if (k === 'namespaces') {
+        if (!NSS[n]) return fail(`Error from server (NotFound): namespaces "${n}" not found`);
+        if (n === 'default' || SYSTEM_NS.includes(n)) return fail(`Error from server (Forbidden): namespaces "${n}" is forbidden: this namespace may not be deleted`);
+        if (!isAdmin(cmdCtx)) return fail(`Error from server (Forbidden): namespaces "${n}" is forbidden: User "${sh.user}" cannot delete resource "namespaces" in API group "" in the namespace "${n}"`);
+        delete NSS[n]; return ok(`namespace "${n}" deleted`);
+      }
       if (k === 'deployments') { const d = deps[n]; if (!d) return fail(`Error from server (NotFound): deployments.apps "${n}" not found`); d.pods.forEach(p => delete pods[p]); delete deps[n]; return ok(`deployment.apps "${n}" deleted`); }
       return fail(`error: the server doesn't have a resource type "${k}"`);
     }
@@ -595,7 +633,14 @@
       const f = kflags(argv.slice(2));
       const sub = argv[1];
       if (!sub || sub === '--help' || sub === '-h') return ok('kubectl controls the Kubernetes cluster manager.\n\nBasic Commands (Beginner):\n  create          Create a resource from a file or from stdin\n  run             Run a particular image on the cluster\n\nBasic Commands (Intermediate):\n  get             Display one or many resources\n  delete          Delete resources by file names, stdin, resources and names, or by resources and label selector\n\nTroubleshooting and Debugging Commands:\n  describe        Show details of a specific resource or group of resources\n  logs            Print the logs for a container in a pod\n\nAdvanced Commands:\n  apply           Apply a configuration to a resource by file name or stdin\n  wait            Experimental: Wait for a specific condition on one or many resources');
-      if (f.n && f.n !== 'default' && ['apply', 'create', 'run'].includes(sub)) return fail(`Error from server (NotFound): namespaces "${f.n}" not found`);
+      const nsArg = f.n || f.namespace;
+      cmdNsExplicit = !!nsArg && !(f.A || f['all-namespaces']); cmdNs = nsArg || 'default'; cmdCtx = ctx;
+      const makesNs = sub === 'create' && /^(ns|namespace)$/.test(f._[0] || '');
+      if (nsArg && !NSS[nsArg] && ['apply', 'create', 'run'].includes(sub) && !makesNs) return fail(`Error from server (NotFound): namespaces "${nsArg}" not found`);
+      useNs(cmdNs);
+      try { return kubectlSub(sub, f, ctx, argv); } finally { useNs('default'); cmdNs = 'default'; cmdNsExplicit = false; }
+    }
+    function kubectlSub(sub, f, ctx, argv) {
       switch (sub) {
         case 'get': return get(f);
         case 'describe': return describe(f);
@@ -677,6 +722,7 @@
         else if (!err && /\.ya?ml$/.test(path) && ![P.jobPath, P.podPath].includes(path)) sh.hint(`Saved, but the task asks for ${P.jobPath} and ${P.podPath}. A grader checks the exact path.`);
       },
       grade() {
+        useNs('default');
         const res = [];
         res.push({ id: 'env', pass: moduleLoaded && ev.nodesShown, detail: !moduleLoaded ? 'The kubernetes module is not loaded (module load kubernetes).' : ev.nodesShown ? 'Module loaded and nodes listed as Ready.' : 'Module loaded, but you never listed the nodes (kubectl get nodes).' });
         // job file

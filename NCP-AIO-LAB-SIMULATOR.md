@@ -46,6 +46,8 @@ Also supported, from a candidate's lab drill:
 - `vi` with `i`, `Esc`, `:w`, `:wq`, `:x`, `:q!`, `ZZ`, `dd` and `:set paste`
 - `squeue -o "<format>"`, `journalctl -b -1` / `--list-boots`, `munge -n | unmunge` (also `munge -n | ssh node002 unmunge`)
 - `kubectl logs -l <selector>`, `kubectl get pod a b`, `kubectl get deploy,pods`, `kubectl get pod/a job/b`, `-n kube-system` / `-n gpu-operator`
+- Namespaces in Lab 2: `kubectl create namespace X` (root, or `sudo kubectl` as student), `-n X` on every command, `metadata.namespace` in manifests, `kubectl get ns`, `kubectl delete ns X`
+- Lab 3 after deploying: `kubectl get pods -n gpu-operator` / `-n kube-system` / `-A`, `kubectl get ns`, `kubectl get nodes -o wide`
 - cmsh `interfaces`, `roles` (assign/unassign), `foreach -n node001..node003 ( ... )`, `imageupdate [-w]`, `power on|off|reset|status`
 - cmsh `ds` and `status -n NODE`
 - `module load kubernetes/<anything>`
@@ -63,6 +65,7 @@ Also supported, from a candidate's lab drill:
 - Saving a manifest into a directory that doesn't exist fails, so you need `mkdir -p`. A Job needs `restartPolicy: Never|OnFailure`.
 - In cmsh, references (`set softwareimage`, `set category`) only work for committed objects, and `quit` discards uncommitted changes. A new node must be committed before `power on`.
 - Other users' home directories are not readable without root (use sudo as `student`).
+- Folders named in task paths already exist (as on the exam); file paths in task text are highlighted.
 - `cm-kubernetes-setup` does not pre-select the NVIDIA GPU Operator; the task requires it.
 - Grading uses the end state: draining a wrong node and resuming it is fine; deleting a Pod after verifying fails the verify check.
 
