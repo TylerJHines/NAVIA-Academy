@@ -56,3 +56,4 @@ header > div:first-child{flex:1 1 auto;min-width:0}
 .exam-day-figure figcaption{margin:12px 0 16px;font-size:14px}
 .exam-day-disclaimer{color:#bacde4;line-height:1.65;margin:16px 0 36px}
 @media(max-width:650px){.exam-day-prep h1{margin:19px 0}.exam-day-figure>a{border-radius:8px}}
+.team-code-input{min-width:220px;padding:10px 12px;border-radius:9px;border:1px solid #3a5272;background:#0f1b2d;color:#e8f1fb;font:inherit;text-transform:uppercase;letter-spacing:.06em}.team-code{font-family:ui-monospace,Consolas,monospace;letter-spacing:.06em;color:#8ae0b7}

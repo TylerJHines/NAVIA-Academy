@@ -90,6 +90,29 @@ service cloud.firestore {
     }
 
     // ------------------------------------------
+    // TEAM CODE THE USER JOINED
+    // ------------------------------------------
+
+    match /users/{userId}/team/{docId} {
+      allow read, delete: if owner(userId) &&
+        docId == 'current';
+
+      allow create, update: if owner(userId) &&
+        docId == 'current' &&
+        request.resource.data.keys().hasOnly([
+          'teamId',
+          'joinedAt'
+        ]) &&
+        request.resource.data.teamId is string &&
+        request.resource.data.teamId.matches(
+          '^[A-Z0-9][A-Z0-9-]{3,39}$'
+        ) &&
+        exists(
+          /databases/$(database)/documents/companies/$(request.resource.data.teamId)
+        );
+    }
+
+    // ------------------------------------------
     // NCP-AIN SIMULATOR
     // ------------------------------------------
 
@@ -131,13 +154,13 @@ service cloud.firestore {
     }
 
     // ------------------------------------------
-    // COMPANY WORKSPACES
+    // TEAM WORKSPACES (document ID = team code)
     // ------------------------------------------
 
     match /companies/{companyId} {
 
-      // Signed-in users can look up a company
-      // workspace by its email domain.
+      // Signed-in users can look up a team
+      // by its team code.
       allow get: if signedIn();
 
       // Workspaces must be provisioned by
@@ -171,11 +194,7 @@ service cloud.firestore {
           request.resource.data.email ==
             request.auth.token.email &&
 
-          request.resource.data.status == 'pending' &&
-
-          request.resource.data.email.matches(
-            '^[^@]+@' + companyId + '$'
-          );
+          request.resource.data.status == 'pending';
 
         allow update: if false;
 
@@ -198,12 +217,27 @@ service cloud.firestore {
         allow list: if approvedMember(companyId) ||
           companyAdmin(companyId);
 
-        // Company administrator approves a
-        // pending employee access request.
+        // The team administrator approves a pending
+        // request, or creates their own admin row.
         allow create: if companyAdmin(companyId) &&
 
-          exists(
-            /databases/$(database)/documents/companies/$(companyId)/requests/$(uid)
+          (
+            (
+              exists(
+                /databases/$(database)/documents/companies/$(companyId)/requests/$(uid)
+              ) &&
+              request.resource.data.role == 'member' &&
+              request.resource.data.email ==
+                get(
+                  /databases/$(database)/documents/companies/$(companyId)/requests/$(uid)
+                ).data.email
+            ) ||
+            (
+              owner(uid) &&
+              request.resource.data.role == 'admin' &&
+              request.resource.data.email ==
+                request.auth.token.email
+            )
           ) &&
 
           request.resource.data.keys().hasOnly([
@@ -239,13 +273,6 @@ service cloud.firestore {
           ]) &&
 
           request.resource.data.uid == uid &&
-
-          request.resource.data.email ==
-            get(
-              /databases/$(database)/documents/companies/$(companyId)/requests/$(uid)
-            ).data.email &&
-
-          request.resource.data.role == 'member' &&
 
           request.resource.data.status == 'active' &&
 
