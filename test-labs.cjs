@@ -46,7 +46,8 @@ function solveK8s(t) {
   run('module load kubernetes'); run('kubectl get nodes');
   run(`cat > ${P.jobPath}`); T.jobfile.manifest.split('\n').forEach(run); t.lab.shell.endInput();
   run(`kubectl apply -f ${P.jobPath}`); t.wait(10); run('kubectl get jobs');
-  run(P.logMode === 'save' ? `kubectl logs job/${P.jobName} > ${P.logPath}` : `kubectl logs job/${P.jobName}`);
+  if (P.logMode !== 'save') run(`kubectl logs job/${P.jobName}`);
+  if (P.logMode !== 'show') run(`kubectl logs job/${P.jobName} > ${P.logPath}`);
   run(`cat <<EOF > ${P.podPath}`); T.podfile.manifest.split('\n').forEach(run); run('EOF');
   run(`kubectl apply -f ${P.podPath}`); run(`kubectl run ${P.runName} --image ${P.runImage}`); t.wait(5); run('kubectl get pods');
 }
@@ -99,6 +100,10 @@ for (let seed = 1; seed <= 120; seed++) {
   ['cm-kubernetes-setup', '1', '', '', '', '1', '2', '', '', 'y', '2', '', 'cm-kubernetes-setup -c /root/cm-kubernetes-setup.conf'].forEach(t.run);
   allPass(t, 'bcm recover with wizard uninstall');
   t.run('cm-kubernetes-setup --remove'); assert(failed(t, 'deploy'), '--remove must uninstall'); }
+
+{ const t = make('k8s', 1, 'practice'); solveK8s(t); assert(t.lab.shell.read('/root/training-logs.txt').includes('Training job complete'), 'practice saves the Job logs to a file'); }
+{ const t = make('k8s', 1, 'practice'); t.run('module load kubernetes'); const T = Object.fromEntries(t.lab.tasks().map(x => [x.id, x])); t.run(`cat > ${t.P.jobPath}`); T.jobfile.manifest.split('\n').forEach(t.run); t.lab.shell.endInput(); t.run(`kubectl apply -f ${t.P.jobPath}`); t.wait(10); t.run('kubectl logs job/training');
+  assert(failed(t, 'joblogs'), 'practice: displaying the logs without saving them must not pass'); t.run('kubectl logs job/training > /root/training-logs.txt'); assert(!failed(t, 'joblogs'), 'practice: display + save passes'); }
 
 /* ---- namespaces ---- */
 { const t = make('k8s', 1, 'practice', 'root'); t.run('module load kubernetes');

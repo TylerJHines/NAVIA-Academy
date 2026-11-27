@@ -47,7 +47,7 @@
     const P = practice ? {
       jobName: 'training', jobImage: 'busybox:1.36', jobMsg: 'Training job complete', jobPath: asRoot ? '/root/lab2/training-job.yaml' : '/home/student/jobs/training.yaml',
       podName: 'inference', podImage: 'nginx:1.27', podPath: asRoot ? '/root/lab2/inference-pod.yaml' : '/home/student/workloads/inference.yaml',
-      runName: 'inference-direct', runImage: 'nginx:1.27', logMode: 'show', logPath: null, seed: seed
+      runName: 'inference-direct', runImage: 'nginx:1.27', logMode: 'both', logPath: `${H}/training-logs.txt`, seed: seed
     } : (() => {
       const podName = NL.pick(r, ['web-frontend', 'inference-api', 'model-server']);
       const logMode = NL.pick(r, ['show', 'save']);
@@ -674,7 +674,7 @@
         { id: 'env', text: 'Load the Kubernetes environment module and confirm all cluster nodes are Ready.' },
         { id: 'jobfile', text: `Save this Job manifest to ${P.jobPath}:`, manifest: JOB_YAML.join('\n') },
         { id: 'jobrun', text: `Create the Job from that file and confirm it completes.` },
-        { id: 'joblogs', text: P.logMode === 'save' ? `Save the Job's logs to ${P.logPath}.` : 'Display the Job\'s logs.' },
+        { id: 'joblogs', text: P.logMode === 'both' ? `Display the Job's logs, then save them to ${P.logPath}.` : P.logMode === 'save' ? `Save the Job's logs to ${P.logPath}.` : 'Display the Job\'s logs.' },
         { id: 'podfile', text: `Save this Pod manifest to ${P.podPath}, then create the Pod from that file:`, manifest: POD_YAML.join('\n') },
         { id: 'runpod', text: `Run a second Pod named ${P.runName} directly from the image ${P.runImage}, without a manifest file.` },
         { id: 'verify', text: 'Confirm that both Pods are Running.' }
@@ -745,7 +745,11 @@
         else if (!jobStatus(j).done) jr2 = [false, `Job ${P.jobName} was created from the file but has not completed (${pods[j.podName] ? pstatus(pods[j.podName]).st : 'no pod'}).`];
         else jr2 = [true, `Job ${P.jobName} was created from ${P.jobPath} and is Complete.`];
         res.push({ id: 'jobrun', pass: jr2[0], detail: jr2[1] });
-        if (P.logMode === 'save') {
+        if (P.logMode === 'both') {
+          const lt = sh.read(P.logPath), saved = !!lt && lt.includes(P.jobMsg);
+          const miss = [!ev.logsShown ? `display them (kubectl logs job/${P.jobName})` : '', !saved ? (lt === undefined ? `save them (kubectl logs job/${P.jobName} > ${P.logPath})` : `${P.logPath} does not contain the Job output`) : ''].filter(Boolean);
+          res.push({ id: 'joblogs', pass: ev.logsShown && saved, detail: miss.length ? 'Still to do: ' + miss.join('; ') + '.' : `You displayed the Job logs and saved them to ${P.logPath}.` });
+        } else if (P.logMode === 'save') {
           const lt = sh.read(P.logPath);
           res.push({ id: 'joblogs', pass: !!lt && lt.includes(P.jobMsg), detail: lt === undefined ? `No file at ${P.logPath}. Example: kubectl logs job/${P.jobName} > ${P.logPath}` : lt.includes(P.jobMsg) ? `${P.logPath} contains the Job output.` : `${P.logPath} exists but does not contain the Job output.` });
         } else res.push({ id: 'joblogs', pass: ev.logsShown, detail: ev.logsShown ? 'You displayed the Job logs.' : `The Job logs were never displayed (kubectl logs job/${P.jobName}).` });
@@ -774,7 +778,7 @@
         return ['module load kubernetes', 'kubectl get nodes',
           `vi ${P.jobPath}`, '#  press i, paste the Job manifest from the task, press Esc, type :wq',
           `cat ${P.jobPath}`, `kubectl apply -f ${P.jobPath}`, 'kubectl get jobs', '#  repeat kubectl get jobs until STATUS is Complete',
-          P.logMode === 'save' ? `kubectl logs job/${P.jobName} > ${P.logPath}` : `kubectl logs job/${P.jobName}`,
+          ...(P.logMode === 'show' ? [`kubectl logs job/${P.jobName}`] : (P.logMode === 'both' ? [`kubectl logs job/${P.jobName}`] : []).concat([`kubectl logs job/${P.jobName} > ${P.logPath}      # > sends the output into the file`, `cat ${P.logPath}`])),
           `vi ${P.podPath}`, '#  press i, paste the Pod manifest from the task, press Esc, type :wq',
           `cat ${P.podPath}`, `kubectl apply -f ${P.podPath}`,
           `kubectl run ${P.runName} --image=${P.runImage}`, 'kubectl get pods',

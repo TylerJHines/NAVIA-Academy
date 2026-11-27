@@ -73,6 +73,6 @@ Also supported, from a candidate's lab drill:
 
 These were guessed and are easy to change:
 1. **Users.** All labs default to `root`, as a candidate reported; `student` with sudo remains an option for Labs 1 and 2.
-2. **Log task.** Exam mode randomly asks either to display the Job logs or to save them to a file.
+2. **Log task.** Practice mode asks you to display the Job logs and then save them to a file (`kubectl logs job/training > ~/training-logs.txt`). Exam mode randomly asks for one of the two.
 3. **Wizard.** The `cm-kubernetes-setup` screens and the saved config's layout are approximations of the real ncurses tool.
 4. **Default paths.** `/root/cm-kubernetes-setup.conf` as the default config path; module name `kubernetes`; partition `defq`; node names `node001…`.
