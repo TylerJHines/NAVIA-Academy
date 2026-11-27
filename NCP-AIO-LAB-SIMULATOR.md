@@ -76,3 +76,16 @@ These were guessed and are easy to change:
 2. **Log task.** Practice mode asks you to display the Job logs and then save them to a file (`kubectl logs job/training > ~/training-logs.txt`). Exam mode randomly asks for one of the two.
 3. **Wizard.** The `cm-kubernetes-setup` screens and the saved config's layout are approximations of the real ncurses tool.
 4. **Default paths.** `/root/cm-kubernetes-setup.conf` as the default config path; module name `kubernetes`; partition `defq`; node names `node001…`.
+
+## Fault lab (15 guided labs) — aligned with the 3 Reported Labs
+
+`aio/fault-labs.js` runs the guided fault labs and the mock exam's lab section. It follows the same conventions as the 3 Reported Labs:
+
+- You are `root@headnode`. slurmd, kubelet, the GPUs and node logs are on the compute nodes: `ssh node002` (or `ssh node002 COMMAND`), then `exit`.
+- The Slurm partition is `defq`; ReturnToService=0, so a node fixed on the node side still needs `scontrol update nodename=NODE state=resume`. Draining needs `reason="..."`.
+- `kubectl` needs `module load kubernetes` first. The GPU Operator runs in `-n gpu-operator`. `kubectl describe pod NAME` matches a name prefix, like the real kubectl.
+- BCM uses real cmsh syntax: `softwareimage` (not `image`), `add physicalnode`, `power on -n`, `status -n`, `imageupdate -w`, navigated or `cmsh -c "...; commit"`.
+- There are no made-up commands (`simctl` and `provision` are gone). Fixes are real: `scancel`, `scontrol update jobid=... partition=defq`, `sed -i` on gres.conf, `kubectl taint ...-`, `kubectl set env`, `kubectl rollout restart daemonset/... -n gpu-operator`, `nvidia-bug-report.sh`, `rm`.
+- A checklist step is ticked by what the command did, not by its exact text, so equivalent forms count (case-insensitive `scontrol` keys, `start` vs `restart`, `dmesg` vs `journalctl -k`, `rollout undo` vs `set image`, navigated cmsh vs `cmsh -c`).
+
+`node test-faults.cjs` runs every lab's reference commands, the alternative forms, and mistakes that must not pass.
